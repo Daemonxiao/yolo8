@@ -1,0 +1,144 @@
+# 实时视频检测系统配置文件
+
+# 模型配置
+model:
+  # 模型文件路径
+  path: "constuction_waste/best.pt"
+  #path: "yolov8n.pt"
+  # 备用模型配置（可选择不同精度的模型）
+  models:
+    high_accuracy: "constuction_waste/best.pt"
+    lightweight: "yolov8n.pt"
+  # 当前使用的模型类型
+  current_model: "high_accuracy"
+
+# 检测参数配置
+detection:
+  # 置信度阈值（0.0-1.0）
+  confidence_threshold: 0.5
+  # IoU阈值（用于非极大值抑制）
+  iou_threshold: 0.45
+  # 检测图像尺寸
+  image_size: 640
+  # 处理频率（每秒处理多少帧，0表示处理所有帧）
+  fps_limit: 1
+  # 最大同时处理的视频流数量
+  max_streams: 10
+  # 自定义类别名称映射（中文化）
+  custom_class_names:
+    "pallet": "托盘"
+    "wires": "电线"
+    "rebar": "钢筋"
+    "cementitious": "水泥材料"
+    "pvc": "PVC材料"
+    "bricks": "砖块"
+    "Disposed Soil": "废弃土壤"
+    "Temporary Soil": "临时土壤"
+    "Roll-Off Dumpster": "垃圾箱"
+    "Roll-off Dumpster": "垃圾箱"
+    "Disposed Gravel": "废弃砂石"
+    "Temporary Gravel": "临时砂石"
+    "Temporary Sand": "临时沙土"
+    "wood": "木材"
+
+# 报警规则配置
+alarm:
+  # 触发报警的最小置信度
+  min_confidence: 0.5
+  # 连续检测到目标的帧数才触发报警
+  consecutive_frames: 3
+  # 报警冷却时间（秒）- 避免频繁报警
+  cooldown_seconds: 30
+  # 报警级别
+  levels:
+    low: 0.3
+    medium: 0.5
+    high: 0.7
+  # 支持的报警方式
+  notification_methods:
+    - "callback"  # HTTP回调
+    - "log"       # 日志记录
+    - "email"     # 邮件通知（可选）
+
+# 视频流配置
+video_streams:
+  # 缓冲区大小（帧数）
+  buffer_size: 5
+  # 连接超时时间（秒）
+  connection_timeout: 10
+  # 重连间隔（秒）
+  reconnect_interval: 5
+  # 最大重连次数
+  max_reconnect_attempts: 3
+  # 支持的视频格式
+  supported_formats:
+    - "rtsp"
+    - "rtmp"
+    - "http"
+    - "file"
+    - "camera"
+
+# API服务配置
+api:
+  # 服务端口
+  port: 8080
+  # 服务主机
+  host: "0.0.0.0"
+  # API版本
+  version: "v1"
+  # 是否启用调试模式
+  debug: false
+  # 允许的跨域来源
+  cors_origins:
+    - "*"
+
+# 日志配置
+logging:
+  # 日志级别
+  level: "INFO"
+  # 日志文件路径
+  file_path: "logs/detection.log"
+  # 日志文件大小限制（MB）
+  max_file_size: 100
+  # 保留的日志文件数量
+  backup_count: 5
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 性能配置
+performance:
+  # 是否使用GPU
+  use_gpu: false
+  # GPU设备ID
+  gpu_device: 0
+  # 工作线程数
+  worker_threads: 4
+  # 内存使用限制（MB）
+  memory_limit: 2048
+
+# 存储配置
+storage:
+  # 是否保存检测结果信息文件
+  save_results: true
+  # 是否保存检测图像
+  save_images: true
+  # 结果保存路径
+  results_path: "results/"
+  # 图像保存路径
+  images_path: "results/images/"
+  # 数据保留天数
+  retention_days: 30
+  # 是否只保存有检测结果的帧
+  save_only_detections: true
+  # 最大保存文件数量（防止磁盘满）
+  max_saved_files: 10000
+  # 图像质量设置
+  image_format: "png"  # 图像格式: "png"(无损) 或 "jpg"(有损)
+  jpeg_quality: 100    # JPEG质量 (1-100，仅当format为jpg时有效)
+  png_compression: 1   # PNG压缩级别 (0-9，0最快，9最小)
+  # 视频捕获设置
+  capture_width: 640   # 期望的捕获宽度 (降低以避免H264问题)
+  capture_height: 480  # 期望的捕获高度
+  capture_fps: 15      # 期望的捕获帧率 (降低以减少编码负担)
+  # 优先编码格式 ("YUYV", "MJPEG", "AUTO")
+  preferred_codec: "YUYV"

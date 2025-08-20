@@ -1,0 +1,25 @@
+{
+  "test_streams": [
+    {
+      "stream_id": "test_camera_001",
+      "name": "测试摄像头1",
+      "rtsp_url": "rtsp://localhost:8554/main",
+      "confidence_threshold": 0.25,
+      "fps_limit": 10
+    },
+    {
+      "stream_id": "test_camera_002", 
+      "name": "测试摄像头2",
+      "rtsp_url": "rtsp://localhost:8555/backup",
+      "confidence_threshold": 0.3,
+      "fps_limit": 15
+    },
+    {
+      "stream_id": "test_camera_003",
+      "name": "测试摄像头3",
+      "rtsp_url": "rtsp://localhost:8556/hq",
+      "confidence_threshold": 0.35,
+      "fps_limit": 20
+    }
+  ]
+}

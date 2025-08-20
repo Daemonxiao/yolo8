@@ -1,3 +1,35 @@
-ultralytics
-opencv-python
-numpy
+# 实时视频检测系统依赖包
+
+# 核心依赖
+ultralytics==8.0.227      # YOLO模型
+opencv-python==4.11.0.86  # 计算机视觉
+torch>=2.0.0             # 深度学习框架
+torchvision>=0.15.0      # 视觉工具
+numpy==2.1.2             # 数值计算
+pillow==11.0.0           # 图像处理
+
+# API服务
+Flask==3.0.0             # Web框架
+Flask-CORS==4.0.0        # 跨域支持
+requests==2.32.3         # HTTP客户端
+
+# 配置和数据处理
+PyYAML==6.0.2            # YAML配置文件
+pandas==2.2.3            # 数据处理
+
+# 日志和监控
+coloredlogs==15.0.1      # 彩色日志
+psutil==6.1.1            # 系统监控
+
+# 其他工具
+tqdm==4.67.1             # 进度条
+packaging==24.2          # 包管理
+typing_extensions==4.14.0 # 类型提示
+
+# 可选依赖（邮件通知）
+# smtplib 是标准库，无需额外安装
+
+# 开发依赖
+# pytest>=7.0.0          # 测试框架
+# black>=22.0.0          # 代码格式化
+# flake8>=5.0.0          # 代码检查
