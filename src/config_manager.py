@@ -23,7 +23,8 @@ class ConfigManager:
         self.config_path = config_path
         self.config: Dict[str, Any] = {}
         self.logger = logging.getLogger(__name__)
-        self.load_config()
+        # 延迟加载配置，避免在导入时立即加载
+        self._loaded = False
     
     def load_config(self) -> None:
         """加载配置文件"""
@@ -36,10 +37,12 @@ class ConfigManager:
             
             self.logger.info(f"配置文件加载成功: {self.config_path}")
             self._validate_config()
+            self._loaded = True
             
         except Exception as e:
             self.logger.error(f"加载配置文件失败: {e}")
             self._load_default_config()
+            self._loaded = True
     
     def _validate_config(self) -> None:
         """验证配置文件的有效性"""
@@ -49,13 +52,13 @@ class ConfigManager:
             if section not in self.config:
                 raise ValueError(f"配置文件缺少必要部分: {section}")
         
-        # 验证模型路径
-        model_path = self.get('model.path')
+        # 验证模型路径 - 直接访问配置避免递归
+        model_path = self.config.get('model', {}).get('path')
         if model_path and not os.path.exists(model_path):
             self.logger.warning(f"模型文件不存在: {model_path}")
         
-        # 验证置信度阈值
-        confidence = self.get('detection.confidence_threshold')
+        # 验证置信度阈值 - 直接访问配置避免递归
+        confidence = self.config.get('detection', {}).get('confidence_threshold', 0.25)
         if not (0.0 <= confidence <= 1.0):
             raise ValueError("置信度阈值必须在0.0-1.0之间")
     
@@ -113,6 +116,14 @@ class ConfigManager:
         Returns:
             配置值
         """
+        # 确保配置已加载，但避免无限递归
+        if not self._loaded and not hasattr(self, '_loading'):
+            self._loading = True
+            try:
+                self.load_config()
+            finally:
+                delattr(self, '_loading')
+            
         keys = key.split('.')
         value = self.config
         
@@ -179,45 +190,70 @@ class ConfigManager:
     def reload_config(self) -> None:
         """重新加载配置文件"""
         self.logger.info("重新加载配置文件")
+        self._loaded = False  # 重置加载标志
         self.load_config()
     
     def get_model_path(self) -> str:
         """获取当前模型路径"""
-        current_model = self.get('model.current_model', 'high_accuracy')
-        model_path = self.get(f'model.models.{current_model}')
-        
-        if not model_path:
-            model_path = self.get('model.path')
-        
-        return model_path
+        # 确保配置已加载
+        if not self._loaded:
+            self.load_config()
+            
+        # 直接访问配置，避免递归调用get方法
+        try:
+            current_model = self.config.get('model', {}).get('current_model', 'high_accuracy')
+            models = self.config.get('model', {}).get('models', {})
+            model_path = models.get(current_model)
+            
+            if not model_path:
+                model_path = self.config.get('model', {}).get('path')
+            
+            return model_path or "constuction_waste/best.pt"  # 默认路径
+        except Exception:
+            return "constuction_waste/best.pt"
     
     def get_detection_params(self) -> Dict[str, Any]:
         """获取检测参数"""
+        # 确保配置已加载
+        if not self._loaded:
+            self.load_config()
+            
+        detection = self.config.get('detection', {})
         return {
-            'confidence_threshold': self.get('detection.confidence_threshold', 0.25),
-            'iou_threshold': self.get('detection.iou_threshold', 0.45),
-            'image_size': self.get('detection.image_size', 640),
-            'fps_limit': self.get('detection.fps_limit', 30)
+            'confidence_threshold': detection.get('confidence_threshold', 0.25),
+            'iou_threshold': detection.get('iou_threshold', 0.45),
+            'image_size': detection.get('image_size', 640),
+            'fps_limit': detection.get('fps_limit', 30)
         }
     
     def get_alarm_config(self) -> Dict[str, Any]:
         """获取报警配置"""
+        # 确保配置已加载
+        if not self._loaded:
+            self.load_config()
+            
+        alarm = self.config.get('alarm', {})
         return {
-            'min_confidence': self.get('alarm.min_confidence', 0.5),
-            'consecutive_frames': self.get('alarm.consecutive_frames', 3),
-            'cooldown_seconds': self.get('alarm.cooldown_seconds', 30),
-            'levels': self.get('alarm.levels', {}),
-            'notification_methods': self.get('alarm.notification_methods', ['callback', 'log'])
+            'min_confidence': alarm.get('min_confidence', 0.5),
+            'consecutive_frames': alarm.get('consecutive_frames', 3),
+            'cooldown_seconds': alarm.get('cooldown_seconds', 30),
+            'levels': alarm.get('levels', {}),
+            'notification_methods': alarm.get('notification_methods', ['callback', 'log'])
         }
     
     def get_api_config(self) -> Dict[str, Any]:
         """获取API配置"""
+        # 确保配置已加载
+        if not self._loaded:
+            self.load_config()
+            
+        api = self.config.get('api', {})
         return {
-            'host': self.get('api.host', '0.0.0.0'),
-            'port': self.get('api.port', 8080),
-            'version': self.get('api.version', 'v1'),
-            'debug': self.get('api.debug', False),
-            'cors_origins': self.get('api.cors_origins', ['*'])
+            'host': api.get('host', '0.0.0.0'),
+            'port': api.get('port', 8080),
+            'version': api.get('version', 'v1'),
+            'debug': api.get('debug', False),
+            'cors_origins': api.get('cors_origins', ['*'])
         }
 
 

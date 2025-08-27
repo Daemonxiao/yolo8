@@ -3,11 +3,11 @@
 # 模型配置
 model:
   # 模型文件路径
-  path: "constuction_waste/best.pt"
+  path: "pt_dir/constuction_waste/best.pt"
   #path: "yolov8n.pt"
   # 备用模型配置（可选择不同精度的模型）
   models:
-    high_accuracy: "constuction_waste/best.pt"
+    high_accuracy: "pt_dir/constuction_waste/best.pt"
     lightweight: "yolov8n.pt"
   # 当前使用的模型类型
   current_model: "high_accuracy"
@@ -24,6 +24,10 @@ detection:
   fps_limit: 1
   # 最大同时处理的视频流数量
   max_streams: 10
+  # 自动缩放高分辨率图像以提高性能
+  auto_resize: true
+  # 自动缩放的最大分辨率（单边）
+  max_resolution: 1280
   # 自定义类别名称映射（中文化）
   custom_class_names:
     "pallet": "托盘"

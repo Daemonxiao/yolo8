@@ -43,6 +43,15 @@ class AlarmEvent:
     consecutive_count: int
 
 
+@dataclass 
+class StreamEvent:
+    """流状态事件数据类"""
+    stream_id: str
+    timestamp: float
+    event_type: str  # "connected", "disconnected", "error", "reconnecting"
+    message: str = ""
+
+
 class DetectionEngine:
     """实时检测引擎"""
     
@@ -73,6 +82,7 @@ class DetectionEngine:
         # 回调函数
         self.detection_callbacks: List[Callable[[DetectionResult], None]] = []
         self.alarm_callbacks: List[Callable[[AlarmEvent], None]] = []
+        self.stream_callbacks: List[Callable[[StreamEvent], None]] = []
         
         # 性能统计
         self.stats = {
@@ -96,7 +106,11 @@ class DetectionEngine:
         self.capture_height = config_manager.get('storage.capture_height', 480)
         
         # 类别名称映射（可选的中文化）
-        self.custom_class_names = config_manager.get('detection.custom_class_names', {})
+        self.custom_class_names = config_manager.get('detection.custom_class_names', {}) or {}
+        
+        # 自动缩放配置
+        self.auto_resize = config_manager.get('detection.auto_resize', True)
+        self.max_resolution = config_manager.get('detection.max_resolution', 640)
         
         # 确保保存目录存在
         if self.save_results or self.save_images:
@@ -155,6 +169,26 @@ class DetectionEngine:
         """添加报警回调函数"""
         self.alarm_callbacks.append(callback)
         self.logger.info("添加报警回调函数")
+    
+    def add_stream_callback(self, callback: Callable[[StreamEvent], None]) -> None:
+        """添加流状态回调函数"""
+        self.stream_callbacks.append(callback)
+        self.logger.info("添加流状态回调函数")
+    
+    def _send_stream_event(self, stream_id: str, event_type: str, message: str = "") -> None:
+        """发送流状态事件"""
+        event = StreamEvent(
+            stream_id=stream_id,
+            timestamp=time.time(),
+            event_type=event_type,
+            message=message
+        )
+        
+        for callback in self.stream_callbacks:
+            try:
+                callback(event)
+            except Exception as e:
+                self.logger.error(f"流状态回调函数执行失败: {e}")
     
     def start_detection(self, stream_id: str, video_source: str, 
                        custom_params: Optional[Dict] = None) -> bool:
@@ -342,16 +376,7 @@ class DetectionEngine:
             while not stream_info.get('stop_flag', False):
                 current_time = time.time()
                 
-                # 控制帧率
-                if frame_interval > 0 and (current_time - last_frame_time) < frame_interval:
-                    # 计算需要等待的时间
-                    sleep_time = frame_interval - (current_time - last_frame_time)
-                    if sleep_time > 0:
-                        if frame_id < 5:  # 前5帧记录详细信息
-                            self.logger.info(f"流 {stream_id} 帧率控制: 等待 {sleep_time:.3f}s")
-                        time.sleep(sleep_time)
-                    continue
-                
+                # 读取最新帧
                 ret, frame = cap.read()
                 if not ret:
                     self.logger.warning(f"读取帧失败: {stream_id}")
@@ -360,6 +385,14 @@ class DetectionEngine:
                         cap = self._reconnect_stream(video_source)
                         if cap is None:
                             break
+                    continue
+                
+                # 控制帧率 - 在读取帧后进行时间控制
+                if frame_interval > 0 and (current_time - last_frame_time) < frame_interval:
+                    # 跳过这一帧的处理，但已经清空了缓冲区
+                    if frame_id < 5:  # 前5帧记录详细信息
+                        elapsed = current_time - last_frame_time
+                        self.logger.info(f"流 {stream_id} 帧率控制: 跳过帧 (间隔:{elapsed:.3f}s < {frame_interval:.3f}s)")
                     continue
                 
                 # 检查帧是否损坏（全黑或异常小）
@@ -417,14 +450,44 @@ class DetectionEngine:
             if cap:
                 cap.release()
             self.logger.info(f"检测线程结束: {stream_id}")
+            
+            # 清理流资源（重要！确保流可以重新启动）
+            self._cleanup_stream(stream_id)
+            
+            # 发送流断开事件
+            self._send_stream_event(stream_id, "disconnected", "检测线程结束")
     
     def _process_frame(self, stream_id: str, frame: np.ndarray, 
                       frame_id: int, params: Dict) -> Optional[DetectionResult]:
         """处理单帧图像"""
         try:
+            # 确保参数不为None
+            if params is None:
+                params = {}
+            
+            # 优化高分辨率图像处理
+            original_shape = frame.shape
+            scale_factor = 1.0
+            
+            # 检查是否需要自动缩放
+            if self.auto_resize:
+                max_dimension = max(original_shape[0], original_shape[1])
+                if max_dimension > self.max_resolution:
+                    scale_factor = self.max_resolution / max_dimension
+                    new_width = int(original_shape[1] * scale_factor)
+                    new_height = int(original_shape[0] * scale_factor)
+                    
+                    # 缩放图像用于检测
+                    detection_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                    self.logger.debug(f"流 {stream_id} 图像自动缩放: {original_shape[1]}x{original_shape[0]} -> {new_width}x{new_height}")
+                else:
+                    detection_frame = frame
+            else:
+                detection_frame = frame
+            
             # 运行推理
             results = self.model(
-                frame,
+                detection_frame,
                 conf=params.get('confidence_threshold', 0.5),
                 iou=params.get('iou_threshold', 0.45),
                 imgsz=params.get('image_size', 640),
@@ -447,16 +510,25 @@ class DetectionEngine:
                         # 获取原始类别名称
                         original_class_name = self.model.names[int(cls)]
                         # 检查是否有自定义映射
-                        class_name = self.custom_class_names.get(original_class_name, original_class_name)
+                        if self.custom_class_names and isinstance(self.custom_class_names, dict):
+                            class_name = self.custom_class_names.get(original_class_name, original_class_name)
+                        else:
+                            class_name = original_class_name
+                        
+                        # 如果进行了缩放，需要将坐标映射回原始图像
+                        if scale_factor != 1.0:
+                            scaled_box = box / scale_factor
+                        else:
+                            scaled_box = box
                         
                         detection = {
                             'id': i,
                             'class_name': class_name,
                             'class_id': int(cls),
                             'confidence': float(conf),
-                            'bbox': box.tolist(),  # [x1, y1, x2, y2]
-                            'center': [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2],
-                            'area': (box[2] - box[0]) * (box[3] - box[1])
+                            'bbox': scaled_box.tolist(),  # [x1, y1, x2, y2] - 原始图像坐标
+                            'center': [(scaled_box[0] + scaled_box[2]) / 2, (scaled_box[1] + scaled_box[3]) / 2],
+                            'area': (scaled_box[2] - scaled_box[0]) * (scaled_box[3] - scaled_box[1])
                         }
                         
                         detections.append(detection)

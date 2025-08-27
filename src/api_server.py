@@ -51,6 +51,10 @@ class APIServer:
         self.server_thread: Optional[threading.Thread] = None
         self.is_running = False
         
+        # 回调错误计数（用于熔断机制）
+        self.callback_error_counts: Dict[str, int] = {}  # stream_id -> error_count
+        self.callback_disabled: Dict[str, bool] = {}     # stream_id -> is_disabled
+        
         self.logger.info("API服务器初始化完成")
     
     def _register_routes(self) -> None:
@@ -347,6 +351,10 @@ class APIServer:
         """注册流的回调函数"""
         def detection_callback(result: DetectionResult):
             """检测结果回调"""
+            # 检查回调是否被禁用（熔断）
+            if self.callback_disabled.get(stream_id, False):
+                return
+            
             try:
                 payload = {
                     'type': 'detection',
@@ -366,13 +374,13 @@ class APIServer:
                 )
                 
                 if response.status_code != 200:
-                    self.logger.warning(
-                        f"检测回调响应异常: {stream_id}, "
-                        f"状态码: {response.status_code}"
-                    )
+                    self._handle_callback_error(stream_id, f"状态码: {response.status_code}")
+                else:
+                    # 成功回调，重置错误计数
+                    self.callback_error_counts[stream_id] = 0
                 
             except Exception as e:
-                self.logger.error(f"检测回调发送失败: {stream_id}, {e}")
+                self._handle_callback_error(stream_id, str(e))
         
         def alarm_callback(alarm: AlarmEvent):
             """报警事件回调"""
@@ -409,6 +417,29 @@ class APIServer:
         self.stream_manager.register_callback(stream_id, 'alarm', alarm_callback)
         
         self.logger.info(f"已注册回调函数: {stream_id} -> {callback_url}")
+    
+    def _handle_callback_error(self, stream_id: str, error_msg: str) -> None:
+        """处理回调错误（熔断机制）"""
+        # 增加错误计数
+        current_count = self.callback_error_counts.get(stream_id, 0)
+        self.callback_error_counts[stream_id] = current_count + 1
+        
+        # 检查是否需要熔断
+        if self.callback_error_counts[stream_id] >= 10:  # 连续10次错误后熔断
+            self.callback_disabled[stream_id] = True
+            self.logger.error(
+                f"流 {stream_id} 回调连续失败{self.callback_error_counts[stream_id]}次，已禁用回调: {error_msg}"
+            )
+        elif self.callback_error_counts[stream_id] % 3 == 0:  # 每3次错误记录一次
+            self.logger.warning(
+                f"流 {stream_id} 回调错误 ({self.callback_error_counts[stream_id]}/10): {error_msg}"
+            )
+    
+    def enable_stream_callback(self, stream_id: str) -> None:
+        """重新启用流的回调（手动恢复）"""
+        self.callback_disabled[stream_id] = False
+        self.callback_error_counts[stream_id] = 0
+        self.logger.info(f"流 {stream_id} 回调已重新启用")
     
     def start(self) -> bool:
         """启动API服务器"""

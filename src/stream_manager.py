@@ -9,7 +9,7 @@ import threading
 from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, asdict
 from enum import Enum
-from .detection_engine import DetectionEngine, DetectionResult, AlarmEvent
+from .detection_engine import DetectionEngine, DetectionResult, AlarmEvent, StreamEvent
 from .config_manager import config_manager
 
 
@@ -93,9 +93,9 @@ class StreamManager:
         self.alarm_callbacks: Dict[str, Callable] = {}
         
         # 注册检测引擎回调
-        # 暂不注册检测回调
-        # self.detection_engine.add_detection_callback(self._on_detection_result)
+        self.detection_engine.add_detection_callback(self._on_detection_result)
         self.detection_engine.add_alarm_callback(self._on_alarm_event)
+        self.detection_engine.add_stream_callback(self._on_stream_event)
         
         # 启动监控
         self.start_monitor()
@@ -495,6 +495,12 @@ class StreamManager:
             stream_info.detection_count += result.bbox_count
             stream_info.last_active_time = result.timestamp
             
+            # 如果流之前有错误，现在恢复正常，更新状态
+            if stream_info.status in [StreamStatus.ERROR, StreamStatus.RECONNECTING]:
+                stream_info.status = StreamStatus.ACTIVE
+                stream_info.last_error = ""
+                self.logger.info(f"流 {stream_id} 状态恢复为活跃")
+            
             # 更新性能统计
             if result.processing_time > 0:
                 stats = stream_info.performance_stats
@@ -525,6 +531,38 @@ class StreamManager:
             f"报警事件: 流ID={stream_id}, 类型={alarm.alarm_type}, "
             f"目标={alarm.class_name}, 置信度={alarm.confidence:.2f}"
         )
+    
+    def _on_stream_event(self, event: StreamEvent) -> None:
+        """处理流状态事件回调"""
+        stream_id = event.stream_id
+        
+        if stream_id in self.streams:
+            stream_info = self.streams[stream_id]
+            
+            if event.event_type == "disconnected":
+                # 流断开，更新状态
+                stream_info.status = StreamStatus.ERROR
+                stream_info.error_count += 1
+                stream_info.last_error = event.message
+                self.logger.info(f"流 {stream_id} 已断开: {event.message}")
+                
+            elif event.event_type == "reconnecting":
+                # 流重连中
+                stream_info.status = StreamStatus.RECONNECTING
+                self.logger.info(f"流 {stream_id} 重连中: {event.message}")
+                
+            elif event.event_type == "connected":
+                # 流连接成功
+                stream_info.status = StreamStatus.ACTIVE
+                stream_info.last_error = ""
+                self.logger.info(f"流 {stream_id} 已连接: {event.message}")
+                
+            elif event.event_type == "error":
+                # 流错误
+                stream_info.status = StreamStatus.ERROR
+                stream_info.error_count += 1
+                stream_info.last_error = event.message
+                self.logger.error(f"流 {stream_id} 错误: {event.message}")
     
     def start_monitor(self) -> None:
         """启动监控线程"""
@@ -560,6 +598,15 @@ class StreamManager:
                             stream_info.status = StreamStatus.ERROR
                             stream_info.error_count += 1
                             stream_info.last_error = "流超时"
+                            
+                        # 检查是否有长时间处于重连状态的流
+                        elif (stream_info.status == StreamStatus.RECONNECTING and
+                              current_time - stream_info.last_active_time > 120):  # 120秒重连超时
+                            
+                            self.logger.error(f"流重连超时: {stream_id}")
+                            stream_info.status = StreamStatus.ERROR
+                            stream_info.error_count += 1
+                            stream_info.last_error = "重连超时"
                 
                 time.sleep(10)  # 每10秒检查一次
                 
