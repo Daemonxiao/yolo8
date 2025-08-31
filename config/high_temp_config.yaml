@@ -1,55 +1,43 @@
-# 实时视频检测系统配置文件
+# 高温检测专用配置
+# 只有当温度高于设定值时，才处理检测结果
 
 # 模型配置
 model:
-  # 模型文件路径
-  path: "pt_dir/constuction_waste/best.pt"
-  #path: "yolov8n.pt"
-  # 备用模型配置（可选择不同精度的模型）
+  path: "pt_dir/person/best.pt"
+  
   models:
-    high_accuracy: "pt_dir/constuction_waste/best.pt"
     lightweight: "yolov8n.pt"
-  # 当前使用的模型类型
-  current_model: "high_accuracy"
+    high_accuracy: "pt_dir/person/best.pt"
 
-# 检测参数配置
+# 检测参数
 detection:
-  # 置信度阈值（0.0-1.0）
   confidence_threshold: 0.5
-  # IoU阈值（用于非极大值抑制）
   iou_threshold: 0.45
-  # 检测图像尺寸
   image_size: 640
-  # 处理频率（每秒处理多少帧，0表示处理所有帧）
   fps_limit: 1
-  # 最大同时处理的视频流数量
   max_streams: 10
-  # 自动缩放高分辨率图像以提高性能
   auto_resize: true
-  # 自动缩放的最大分辨率（单边）
   max_resolution: 640
-  # 类别过滤（只检测指定类别，为空则检测所有类别）
-  target_classes: []
-  # 示例: 只检测人
-  # target_classes: ["person"]
-  # 示例: 只检测人和安全帽
-  # target_classes: ["person", "helmet"]
+  # 类别过滤：只检测人员
+  target_classes: ["person"]
   # 自定义类别名称映射（中文化）
-  custom_class_names:
-    "pallet": "托盘"
-    "wires": "电线"
-    "rebar": "钢筋"
-    "cementitious": "水泥材料"
-    "pvc": "PVC材料"
-    "bricks": "砖块"
-    "Disposed Soil": "废弃土壤"
-    "Temporary Soil": "临时土壤"
-    "Roll-Off Dumpster": "垃圾箱"
-    "Roll-off Dumpster": "垃圾箱"
-    "Disposed Gravel": "废弃砂石"
-    "Temporary Gravel": "临时砂石"
-    "Temporary Sand": "临时沙土"
-    "wood": "木材"
+  # custom_class_names:
+  #   "person": "人员"
+  
+  # 🔥 自定义处理类型：高温检测
+  custom_type: "high_temperature_alert"
+  # 🌡️ 高温检测配置
+  custom_type_config:
+    # 是否启用高温检测
+    enabled: true
+    # 温度阈值（摄氏度）
+    temperature_threshold: 34
+    # 温度数据源：api(天气API) / fixed(固定值)
+    temperature_source: "api"
+    # 天气API配置（当temperature_source为api时使用）
+    api_key: "463f3a37789523d2bbbe619be3d03981"
+    city: "310000" # 上海
+
 
 # 报警规则配置
 alarm:
@@ -83,10 +71,10 @@ video_streams:
   # 支持的视频格式
   supported_formats:
     - "rtsp"
-    - "rtmp"
-    - "http"
-    - "file"
-    - "camera"
+    # - "rtmp"
+    # - "http"
+    # - "file"
+    # - "camera"
 
 # API服务配置
 api:

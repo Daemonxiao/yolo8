@@ -3,11 +3,11 @@
 # 模型配置
 model:
   # 模型文件路径
-  path: "pt_dir/constuction_waste/best.pt"
+  path: "pt_dir/fire_smoke/best.pt"
   #path: "yolov8n.pt"
   # 备用模型配置（可选择不同精度的模型）
   models:
-    high_accuracy: "pt_dir/constuction_waste/best.pt"
+    high_accuracy: "pt_dir/fire_smoke/best.pt"
     lightweight: "yolov8n.pt"
   # 当前使用的模型类型
   current_model: "high_accuracy"
@@ -28,28 +28,8 @@ detection:
   auto_resize: true
   # 自动缩放的最大分辨率（单边）
   max_resolution: 640
-  # 类别过滤（只检测指定类别，为空则检测所有类别）
-  target_classes: []
-  # 示例: 只检测人
-  # target_classes: ["person"]
-  # 示例: 只检测人和安全帽
-  # target_classes: ["person", "helmet"]
   # 自定义类别名称映射（中文化）
   custom_class_names:
-    "pallet": "托盘"
-    "wires": "电线"
-    "rebar": "钢筋"
-    "cementitious": "水泥材料"
-    "pvc": "PVC材料"
-    "bricks": "砖块"
-    "Disposed Soil": "废弃土壤"
-    "Temporary Soil": "临时土壤"
-    "Roll-Off Dumpster": "垃圾箱"
-    "Roll-off Dumpster": "垃圾箱"
-    "Disposed Gravel": "废弃砂石"
-    "Temporary Gravel": "临时砂石"
-    "Temporary Sand": "临时沙土"
-    "wood": "木材"
 
 # 报警规则配置
 alarm:

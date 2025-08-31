@@ -17,6 +17,7 @@ from dataclasses import dataclass, asdict
 from ultralytics import YOLO
 import numpy as np
 from .config_manager import config_manager
+from .gaode_weather import GaodeWeather
 
 
 @dataclass
@@ -107,10 +108,30 @@ class DetectionEngine:
         
         # 类别名称映射（可选的中文化）
         self.custom_class_names = config_manager.get('detection.custom_class_names', {}) or {}
+
+        # 自定义类别
+        self.custom_type = config_manager.get('detection.custom_type', '')
+        self.custom_params = config_manager.get('detection.custom_params', {})
         
         # 自动缩放配置
         self.auto_resize = config_manager.get('detection.auto_resize', True)
         self.max_resolution = config_manager.get('detection.max_resolution', 640)
+        
+        # 类别过滤配置
+        self.target_classes = config_manager.get('detection.target_classes', [])
+        if self.target_classes:
+            self.logger.info(f"启用类别过滤，只检测: {self.target_classes}")
+        else:
+            self.logger.info("未设置类别过滤，将检测所有类别")
+        
+        # 自定义处理类型配置
+        self.custom_type = config_manager.get('detection.custom_type', '')
+        self.custom_type_config = config_manager.get('detection.custom_type_config', {})
+        if self.custom_type:
+            self.logger.info(f"启用自定义处理类型: {self.custom_type}")
+            self._initialize_custom_handlers()
+        else:
+            self.logger.info("未设置自定义处理类型，使用标准检测流程")
         
         # 确保保存目录存在
         if self.save_results or self.save_images:
@@ -118,6 +139,74 @@ class DetectionEngine:
             os.makedirs(self.images_path, exist_ok=True)
         
         self.logger.info("检测引擎初始化完成")
+    
+    def _initialize_custom_handlers(self) -> None:
+        """初始化自定义处理器"""
+        try:
+            if self.custom_type == "high_temperature_alert":
+                # 初始化高温检测处理器
+                self._init_high_temperature_handler()
+                
+            # 在这里可以添加更多自定义类型
+            # elif self.custom_type == "other_type":
+            #     self._init_other_handler()
+            
+            self.logger.info(f"自定义处理器 [{self.custom_type}] 初始化完成")
+            
+        except Exception as e:
+            self.logger.error(f"自定义处理器初始化失败: {e}")
+            raise
+    
+    def _init_high_temperature_handler(self) -> None:
+        """初始化高温检测处理器"""
+        # 高温阈值配置
+        self.temperature_threshold = self.custom_type_config.get('temperature_threshold', 35.0)
+        self.temperature_check_enabled = self.custom_type_config.get('enabled', True)
+        
+        # 温度获取方式配置
+        temp_source = self.custom_type_config.get('temperature_source', 'api')
+        
+        if temp_source == 'api':
+            # 从API获取温度
+            self._init_temperature_api()
+        elif temp_source == 'sensor':
+            # 从传感器获取温度（预留）
+            self._init_temperature_sensor()
+        else:
+            # 使用固定温度值
+            self.fixed_temperature = self.custom_type_config.get('fixed_temperature', 25.0)
+            self.logger.info(f"使用固定温度值: {self.fixed_temperature}°C")
+        
+        self.logger.info(f"高温检测阈值: {self.temperature_threshold}°C")
+    
+    def _init_temperature_api(self) -> None:
+        """初始化温度API"""
+        try:
+            # 导入天气API模块
+            from .gaode_weather import GaodeWeather
+            
+            api_key = self.custom_type_config.get('api_key', '')
+            city = self.custom_type_config.get('city', '北京')
+            
+            if not api_key:
+                self.logger.warning("未配置天气API密钥，使用固定温度值")
+                self.fixed_temperature = 25.0
+                return
+            
+            self.weather_api = GaodeWeather(api_key=api_key, city=city)
+            self.logger.info(f"天气API初始化完成: 城市={city}")
+            
+        except ImportError:
+            self.logger.warning("天气API模块不可用，使用固定温度值")
+            self.fixed_temperature = 25.0
+        except Exception as e:
+            self.logger.error(f"天气API初始化失败: {e}")
+            self.fixed_temperature = 25.0
+    
+    def _init_temperature_sensor(self) -> None:
+        """初始化温度传感器（预留接口）"""
+        self.logger.info("温度传感器接口预留，当前使用固定温度值")
+        self.fixed_temperature = 25.0
     
     def _get_device(self) -> str:
         """获取计算设备"""
@@ -413,23 +502,25 @@ class DetectionEngine:
                 if result:
                     result.processing_time = processing_time
                     
-                    # 保存检测结果
-                    if self.save_results or self.save_images:
-                        self._save_detection_result(result, frame, stream_info)
+                    # 🔥 自定义处理逻辑 - 根据custom_type决定是否继续处理
+                    if self._should_continue_processing(result, stream_id):
+                        # 保存检测结果
+                        if self.save_results or self.save_images:
+                            self._save_detection_result(result, frame, stream_info)
                     
-                    # 检查报警条件
-                    self._check_alarm_conditions(result)
+                        # 检查报警条件
+                        self._check_alarm_conditions(result)
                     
-                    # 调用回调函数
-                    for callback in self.detection_callbacks:
-                        try:
-                            callback(result)
-                        except Exception as e:
-                            self.logger.error(f"检测回调函数执行失败: {e}")
+                        # 调用回调函数
+                        for callback in self.detection_callbacks:
+                            try:
+                                callback(result)
+                            except Exception as e:
+                                self.logger.error(f"检测回调函数执行失败: {e}")
                     
                     # 更新统计信息
                     self._update_stats(result)
-                
+
                 frame_id += 1
                 stream_info['frame_count'] = frame_id
                 last_frame_time = current_time
@@ -509,6 +600,12 @@ class DetectionEngine:
                     for i, (box, conf, cls) in enumerate(zip(boxes, confidences, classes)):
                         # 获取原始类别名称
                         original_class_name = self.model.names[int(cls)]
+                        
+                        # 类别过滤：如果指定了target_classes，只处理目标类别
+                        if self.target_classes and len(self.target_classes) > 0:
+                            if original_class_name not in self.target_classes:
+                                continue  # 跳过不在xiao目标类别列表中的检测结果
+                        
                         # 检查是否有自定义映射
                         if self.custom_class_names and isinstance(self.custom_class_names, dict):
                             class_name = self.custom_class_names.get(original_class_name, original_class_name)
@@ -945,3 +1042,92 @@ class DetectionEngine:
             self.stop_detection(stream_id)
         
         self.logger.info("检测引擎已关闭")
+    
+    def _should_continue_processing(self, result: DetectionResult, stream_id: str) -> bool:
+        """
+        根据自定义类型决定是否继续处理检测结果
+        
+        Args:
+            result: 检测结果
+            stream_id: 流ID
+            
+        Returns:
+            是否继续处理
+        """
+        # 如果没有设置自定义类型，始终继续处理
+        if not self.custom_type:
+            return True
+        
+        try:
+            # 根据自定义类型分发到具体处理方法
+            if self.custom_type == "high_temperature_alert":
+                return self._check_high_temperature_condition(result, stream_id)
+            
+            # 这里可以添加更多自定义类型
+            # elif self.custom_type == "low_light_alert":
+            #     return self._check_low_light_condition(result, stream_id)
+            # elif self.custom_type == "motion_detection":
+            #     return self._check_motion_condition(result, stream_id)
+            
+            else:
+                self.logger.warning(f"未知的自定义类型: {self.custom_type}")
+                return True  # 默认继续处理
+                
+        except Exception as e:
+            self.logger.error(f"自定义处理逻辑执行失败: {e}")
+            return True  # 出错时默认继续处理
+    
+    def _check_high_temperature_condition(self, result: DetectionResult, stream_id: str) -> bool:
+        """
+        检查高温条件
+        
+        Args:
+            result: 检测结果
+            stream_id: 流ID
+            
+        Returns:
+            是否满足高温条件（温度高于阈值时返回True）
+        """
+        if not self.temperature_check_enabled:
+            return True
+        
+        try:
+            # 获取当前温度
+            current_temp = self._get_current_temperature()
+            
+            # 检查是否超过阈值
+            is_high_temp = current_temp >= self.temperature_threshold
+            
+            if is_high_temp:
+                self.logger.info(f"🌡️ 高温条件满足: 当前温度 {current_temp}°C >= 阈值 {self.temperature_threshold}°C，继续处理检测结果")
+            else:
+                self.logger.debug(f"🌡️ 温度正常: 当前温度 {current_temp}°C < 阈值 {self.temperature_threshold}°C，跳过处理")
+            
+            return is_high_temp
+            
+        except Exception as e:
+            self.logger.error(f"温度检查失败: {e}")
+            return True  # 出错时默认继续处理
+    
+    def _get_current_temperature(self) -> float:
+        """
+        获取当前温度
+        
+        Returns:
+            当前温度值
+        """
+        try:
+            if hasattr(self, 'weather_api'):
+                # 从天气API获取温度
+                temp_str = self.weather_api.get_temperature()
+                return float(temp_str)
+            elif hasattr(self, 'fixed_temperature'):
+                # 使用固定温度值
+                return self.fixed_temperature
+            else:
+                # 默认温度
+                return 25.0
+                
+        except Exception as e:
+            self.logger.error(f"获取温度失败: {e}")
+            return 25.0  # 默认温度

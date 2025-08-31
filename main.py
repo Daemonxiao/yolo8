@@ -314,9 +314,9 @@ def main():
         
         # 如果是守护进程模式
         if args.daemon:
-            print("系统以守护进程模式运行")
-            # 在实际部署中，这里可以使用专门的守护进程库
-            # 如 python-daemon
+            print("暂不支持守护模式")
+            sys.exit(1)
+            # 需要 python-daemon 额外开发
         
         # 等待关闭
         system.wait_for_shutdown()
