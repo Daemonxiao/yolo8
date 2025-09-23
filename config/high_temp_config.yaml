@@ -31,7 +31,7 @@ detection:
     # 是否启用高温检测
     enabled: true
     # 温度阈值（摄氏度）
-    temperature_threshold: 34
+    temperature_threshold: 30
     # 温度数据源：api(天气API) / fixed(固定值)
     temperature_source: "api"
     # 天气API配置（当temperature_source为api时使用）
