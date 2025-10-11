@@ -11,7 +11,7 @@ import queue
 import logging
 import os
 import json
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from typing import Dict, List, Callable, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
 from ultralytics import YOLO
@@ -146,6 +146,9 @@ class DetectionEngine:
             if self.custom_type == "high_temperature_alert":
                 # 初始化高温检测处理器
                 self._init_high_temperature_handler()
+            elif self.custom_type == "morning_meeting_alert":
+                # 初始化安全晨会预警处理器
+                self._init_morning_meeting_handler()
 
             # 在这里可以添加更多自定义类型
             # elif self.custom_type == "other_type":
@@ -207,6 +210,27 @@ class DetectionEngine:
         """初始化温度传感器（预留接口）"""
         self.logger.info("温度传感器接口预留，当前使用固定温度值")
         self.fixed_temperature = 25.0
+
+    def _init_morning_meeting_handler(self) -> None:
+        """初始化安全晨会预警处理器"""
+        # 晨会时间配置
+        self.meeting_start_time = self.custom_type_config.get('meeting_start_time', '08:00')
+        self.meeting_end_time = self.custom_type_config.get('meeting_end_time', '08:30')
+        self.meeting_check_enabled = self.custom_type_config.get('enabled', True)
+        
+        # 工作日配置（0=周一, 6=周日）
+        self.meeting_weekdays = self.custom_type_config.get('weekdays', [0, 1, 2, 3, 4])  # 默认周一到周五
+        
+        # 人员类别配置
+        self.person_class_names = self.custom_type_config.get('person_class_names', ['person', '人', '人员'])
+        
+        # 告警状态跟踪 - 简化为每日重置
+        self.meeting_alert_states = {}  # stream_id -> {'alert_sent_today': bool, 'last_check_date': date}
+        
+        self.logger.info(f"安全晨会预警配置:")
+        self.logger.info(f"  - 晨会时间: {self.meeting_start_time} - {self.meeting_end_time}")
+        self.logger.info(f"  - 工作日: {self.meeting_weekdays}")
+        self.logger.info(f"  - 人员类别: {self.person_class_names}")
 
     def _get_device(self) -> str:
         """获取计算设备"""
@@ -472,6 +496,7 @@ class DetectionEngine:
                     result.processing_time = processing_time
 
                     # 自定义处理逻辑 - 根据custom_type决定是否继续处理
+                    # 在这里会对result进行修改（删除、添加检测目标等）
                     if self._should_continue_processing(result, stream_id):
                         # 保存检测结果
                         if self.save_results or self.save_images:
@@ -1032,6 +1057,9 @@ class DetectionEngine:
             # 根据自定义类型分发到具体处理方法
             if self.custom_type == "high_temperature_alert":
                 return self._check_high_temperature_condition(result, stream_id)
+            elif self.custom_type == "morning_meeting_alert":
+                # 晨会预警：检查并修改result，然后决定是否继续处理
+                return self._check_morning_meeting_condition(result, stream_id)
 
             # 这里可以添加更多自定义类型
             # elif self.custom_type == "low_light_alert":
@@ -1103,3 +1131,115 @@ class DetectionEngine:
         except Exception as e:
             self.logger.error(f"获取温度失败: {e}")
             return 25.0  # 默认温度
+
+    def _check_morning_meeting_condition(self, result: DetectionResult, stream_id: str) -> bool:
+        """
+        检查安全晨会条件，并直接修改检测结果
+        
+        Args:
+            result: 检测结果（会被直接修改）
+            stream_id: 流ID
+            
+        Returns:
+            是否应该继续处理（保存结果、触发回调等）
+        """
+        if not self.meeting_check_enabled:
+            return False  # 晨会预警模式下，如果未启用则不处理任何结果
+        
+        try:
+            current_time = datetime.now()
+            current_weekday = current_time.weekday()
+            
+            # 检查是否为工作日
+            if current_weekday not in self.meeting_weekdays:
+                return False  # 非工作日不处理
+            
+            # 检查是否在晨会时间段内
+            if not self._is_meeting_time(current_time):
+                return False  # 非晨会时间不处理
+            
+            # 初始化流的告警状态
+            if stream_id not in self.meeting_alert_states:
+                self.meeting_alert_states[stream_id] = {
+                    'alert_sent_today': False,
+                    'last_check_date': current_time.date()
+                }
+            
+            # 检查是否需要重置每日状态
+            if self.meeting_alert_states[stream_id]['last_check_date'] != current_time.date():
+                self.meeting_alert_states[stream_id] = {
+                    'alert_sent_today': False,
+                    'last_check_date': current_time.date()
+                }
+            
+            # 如果今天已经发送过告警，不再重复检查
+            if self.meeting_alert_states[stream_id]['alert_sent_today']:
+                return False  # 今天已告警，不再处理
+            
+            # 检查是否检测到人员
+            has_person = self._has_person_detected(result)
+            
+            if not has_person:
+                # 没有检测到人员，清空原有检测结果，添加晨会告警目标
+                result.detections.clear()
+                result.confidence_scores.clear()
+                
+                # 添加虚拟的晨会告警目标
+                meeting_alert_detection = {
+                    'id': 0,
+                    'class_name': '晨会未召开',
+                    'class_id': 9999,  # 使用一个特殊的class_id
+                    'confidence': 1.0,
+                    'bbox': [0, 0, 100, 50],  # 虚拟的边界框，显示在左上角
+                    'center': [50, 25],
+                    'area': 5000
+                }
+                
+                # 添加到检测结果中
+                result.detections.append(meeting_alert_detection)
+                result.confidence_scores.append(1.0)
+                result.bbox_count = 1
+                
+                # 标记今天已发送告警
+                self.meeting_alert_states[stream_id]['alert_sent_today'] = True
+                
+                self.logger.warning(f"🚨 流 {stream_id} 在晨会时间段内未检测到人员，已添加告警目标")
+                return True  # 继续处理，保存告警结果
+            else:
+                # 检测到人员，晨会正常进行，不需要保存结果
+                self.logger.debug(f"🚶 流 {stream_id} 在晨会时间段内检测到人员，晨会正常进行")
+                return False  # 不继续处理，正常情况不需要保存
+            
+        except Exception as e:
+            self.logger.error(f"晨会预警检查失败: {e}")
+            return False  # 出错时不处理
+    
+    def _is_meeting_time(self, current_time: datetime) -> bool:
+        """检查当前时间是否在晨会时间段内"""
+        try:
+            current_time_only = current_time.time()
+            
+            # 解析开始和结束时间
+            start_hour, start_minute = map(int, self.meeting_start_time.split(':'))
+            end_hour, end_minute = map(int, self.meeting_end_time.split(':'))
+            
+            start_time = dt_time(start_hour, start_minute)
+            end_time = dt_time(end_hour, end_minute)
+            
+            return start_time <= current_time_only <= end_time
+            
+        except Exception as e:
+            self.logger.error(f"时间检查失败: {e}")
+            return False
+    
+    def _has_person_detected(self, result: DetectionResult) -> bool:
+        """检查检测结果中是否包含人员"""
+        for detection in result.detections:
+            class_name = detection.get('class_name', '').lower()
+            # 检查是否为人员类别
+            for person_class in self.person_class_names:
+                if person_class.lower() in class_name or class_name in person_class.lower():
+                    return True
+        return False
+    
+    # 注意：逻辑已重构，所有晨会预警处理都整合在 _check_morning_meeting_condition 中

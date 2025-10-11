@@ -50,6 +50,26 @@ detection:
     "Temporary Gravel": "临时砂石"
     "Temporary Sand": "临时沙土"
     "wood": "木材"
+  
+  # 自定义处理类型（可选）
+  # 可选值: "", "high_temperature_alert", "morning_meeting_alert"
+  custom_type: ""
+  
+  # 自定义处理配置
+  custom_type_config:
+    # 高温预警配置（当custom_type为"high_temperature_alert"时使用）
+    temperature_threshold: 35.0    # 高温阈值（摄氏度）
+    temperature_source: "api"      # 温度来源: "api", "sensor", "fixed"
+    enabled: true                  # 是否启用
+    api_key: ""                    # 天气API密钥
+    city: "北京"                   # 城市名称
+    fixed_temperature: 25.0        # 固定温度值（当source为"fixed"时使用）
+    
+    # 安全晨会预警配置（当custom_type为"morning_meeting_alert"时使用）
+    meeting_start_time: "08:00"    # 晨会开始时间
+    meeting_end_time: "08:30"      # 晨会结束时间
+    weekdays: [0, 1, 2, 3, 4]      # 工作日（0=周一, 6=周日）
+    person_class_names: ["person", "人", "人员"]  # 人员类别名称
 
 # 报警规则配置
 alarm:
