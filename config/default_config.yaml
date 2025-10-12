@@ -52,7 +52,7 @@ detection:
     "wood": "木材"
   
   # 自定义处理类型（可选）
-  # 可选值: "", "high_temperature_alert", "morning_meeting_alert"
+  # 可选值: "", "high_temperature_alert", "morning_meeting_alert", "weather_safety_alert"
   custom_type: ""
   
   # 自定义处理配置
@@ -70,6 +70,13 @@ detection:
     meeting_end_time: "08:30"      # 晨会结束时间
     weekdays: [0, 1, 2, 3, 4]      # 工作日（0=周一, 6=周日）
     person_class_names: ["person", "人", "人员"]  # 人员类别名称
+    
+    # 防台防汛施工预警配置（当custom_type为"weather_safety_alert"时使用）
+    wind_power_threshold: 6        # 风力阈值（级）
+    weather_source: "api"          # 天气数据源: "api", "fixed"
+    dangerous_weather_keywords: ["特大暴雨", "大暴雨", "暴雨", "台风", "飓风", "强风"]  # 危险天气关键词
+    fixed_wind_power: 3            # 固定风力值（当source为"fixed"时使用）
+    fixed_weather_type: "晴"       # 固定天气类型（当source为"fixed"时使用）
 
 # 报警规则配置
 alarm:

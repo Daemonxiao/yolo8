@@ -1,0 +1,125 @@
+# 安全晨会预警系统配置文件
+# 用于检测规定时间内是否召开安全晨会
+
+# 模型配置 - 使用人员检测模型
+model:
+  # 使用人员检测模型
+  path: "pt_dir/person/best.pt"
+  # 如果没有专门的人员模型，可以使用通用模型
+  # path: "yolov8n.pt"
+
+# 检测参数配置
+detection:
+  # 置信度阈值
+  confidence_threshold: 0.3  # 降低阈值以提高人员检测灵敏度
+  # IoU阈值
+  iou_threshold: 0.45
+  # 检测图像尺寸
+  image_size: 640
+  # 处理频率（建议1-2帧/秒即可）
+  fps_limit: 1
+  # 最大同时处理的视频流数量
+  max_streams: 10
+  # 自动缩放配置
+  auto_resize: true
+  max_resolution: 640
+  
+  # 只检测人员类别
+  target_classes: ["person"]
+  
+  # 自定义类别名称映射
+  custom_class_names:
+    "person": "人员"
+  
+  # 启用晨会预警
+  custom_type: "morning_meeting_alert"
+  
+  # 晨会预警配置
+  custom_type_config:
+    enabled: true                    # 启用晨会预警
+    meeting_start_time: "08:00"      # 晨会开始时间
+    meeting_end_time: "23:30"        # 晨会结束时间
+    weekdays: [0, 1, 2, 3, 4, 5, 6]        # 工作日（周一到周五）
+    person_class_names: ["person"]  # 人员类别名称
+
+# 报警规则配置
+alarm:
+  # 晨会预警的最小置信度（用于人员检测）
+  min_confidence: 0.3
+  # 连续检测帧数 - 晨会告警设为1，立即触发
+  consecutive_frames: 1  
+  # 报警冷却时间（秒）- 设置为1800秒（30分钟），避免重复告警
+  cooldown_seconds: 1800  
+  # 报警级别
+  levels:
+    low: 0.3
+    medium: 0.5
+    high: 0.7
+  # 支持的报警方式
+  notification_methods:
+    - "callback"  # HTTP回调
+    - "log"       # 日志记录
+
+# 视频流配置
+video_streams:
+  buffer_size: 1           # 减少缓冲，提高实时性
+  connection_timeout: 10
+  reconnect_interval: 5
+  max_reconnect_attempts: 3
+  supported_formats:
+    - "rtsp"
+    - "rtmp"
+    - "http"
+    - "file"
+    - "camera"
+
+# API服务配置
+api:
+  port: 8080
+  host: "0.0.0.0"
+  version: "v1"
+  debug: false
+  cors_origins:
+    - "*"
+
+# 日志配置
+logging:
+  level: "INFO"
+  file_path: "logs/morning_meeting.log"
+  max_file_size: 100
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 性能配置
+performance:
+  use_gpu: false
+  gpu_device: 0
+  worker_threads: 2        # 晨会检测不需要太多线程
+  memory_limit: 1024
+
+# 存储配置
+storage:
+  save_results: true       # 保存检测结果
+  save_images: true        # 保存图像（用于后续分析）
+  results_path: "results/morning_meeting/"
+  images_path: "results/morning_meeting/images/"
+  retention_days: 7        # 晨会记录保存7天
+  save_only_detections: false  # 保存所有帧（包括无人的帧）
+  max_saved_files: 5000
+  # 图像质量设置
+  image_format: "jpg"      # 使用JPEG节省空间
+  jpeg_quality: 80         # 中等质量即可
+  png_compression: 6
+  # 视频捕获设置
+  capture_width: 640
+  capture_height: 480
+  capture_fps: 15
+  preferred_codec: "YUYV"
+
+# 晨会预警特殊说明:
+# 1. 系统会在工作日的08:00-08:30时间段内监控视频流
+# 2. 在该时间段内，每当检测到无人时立即触发告警
+# 3. 每天只会触发一次告警，避免重复提醒
+# 4. 可以通过修改weekdays来调整工作日设置
+# 5. 可以通过修改meeting_start_time和meeting_end_time来调整晨会时间
+# 6. 逻辑简单：在晨会时间段内检测到无人就告警，检测到有人就正常

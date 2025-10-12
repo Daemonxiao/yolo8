@@ -149,6 +149,9 @@ class DetectionEngine:
             elif self.custom_type == "morning_meeting_alert":
                 # 初始化安全晨会预警处理器
                 self._init_morning_meeting_handler()
+            elif self.custom_type == "weather_safety_alert":
+                # 初始化防台防汛施工预警处理器
+                self._init_weather_safety_handler()
 
             # 在这里可以添加更多自定义类型
             # elif self.custom_type == "other_type":
@@ -231,6 +234,59 @@ class DetectionEngine:
         self.logger.info(f"  - 晨会时间: {self.meeting_start_time} - {self.meeting_end_time}")
         self.logger.info(f"  - 工作日: {self.meeting_weekdays}")
         self.logger.info(f"  - 人员类别: {self.person_class_names}")
+
+    def _init_weather_safety_handler(self) -> None:
+        """初始化防台防汛施工预警处理器"""
+        # 风力阈值配置
+        self.wind_power_threshold = self.custom_type_config.get('wind_power_threshold', 6)  # 默认6级风以上
+        self.weather_safety_enabled = self.custom_type_config.get('enabled', True)
+        
+        # 危险天气关键词配置
+        self.dangerous_weather_keywords = self.custom_type_config.get('dangerous_weather_keywords', 
+                                                                     ['特大暴雨', '大暴雨', '暴雨', '台风', '飓风', '强风'])
+        
+        # 天气数据源配置
+        weather_source = self.custom_type_config.get('weather_source', 'api')
+        
+        if weather_source == 'api':
+            # 从API获取天气数据
+            self._init_weather_safety_api()
+        else:
+            # 使用固定值进行测试
+            self.fixed_wind_power = self.custom_type_config.get('fixed_wind_power', 3)
+            self.fixed_weather_type = self.custom_type_config.get('fixed_weather_type', '晴')
+            self.logger.info(f"使用固定天气值: 风力{self.fixed_wind_power}级, 天气{self.fixed_weather_type}")
+        
+        self.logger.info(f"防台防汛施工预警配置:")
+        self.logger.info(f"  - 风力阈值: {self.wind_power_threshold}级")
+        self.logger.info(f"  - 危险天气关键词: {self.dangerous_weather_keywords}")
+
+    def _init_weather_safety_api(self) -> None:
+        """初始化防台防汛天气API"""
+        try:
+            # 导入天气API模块
+            from .gaode_weather import GaodeWeather
+
+            api_key = self.custom_type_config.get('api_key', '')
+            city = self.custom_type_config.get('city', '北京')
+
+            if not api_key:
+                self.logger.warning("未配置天气API密钥，使用固定天气值")
+                self.fixed_wind_power = 3
+                self.fixed_weather_type = '晴'
+                return
+
+            self.weather_safety_api = GaodeWeather(api_key=api_key, city=city)
+            self.logger.info(f"防台防汛天气API初始化完成: 城市={city}")
+
+        except ImportError:
+            self.logger.warning("天气API模块不可用，使用固定天气值")
+            self.fixed_wind_power = 3
+            self.fixed_weather_type = '晴'
+        except Exception as e:
+            self.logger.error(f"防台防汛天气API初始化失败: {e}")
+            self.fixed_wind_power = 3
+            self.fixed_weather_type = '晴'
 
     def _get_device(self) -> str:
         """获取计算设备"""
@@ -1060,6 +1116,9 @@ class DetectionEngine:
             elif self.custom_type == "morning_meeting_alert":
                 # 晨会预警：检查并修改result，然后决定是否继续处理
                 return self._check_morning_meeting_condition(result, stream_id)
+            elif self.custom_type == "weather_safety_alert":
+                # 防台防汛预警：检查天气条件决定是否继续处理
+                return self._check_weather_safety_condition(result, stream_id)
 
             # 这里可以添加更多自定义类型
             # elif self.custom_type == "low_light_alert":
@@ -1241,5 +1300,75 @@ class DetectionEngine:
                 if person_class.lower() in class_name or class_name in person_class.lower():
                     return True
         return False
+    
+    def _check_weather_safety_condition(self, result: DetectionResult, stream_id: str) -> bool:
+        """
+        检查防台防汛施工安全条件
+        
+        Args:
+            result: 检测结果
+            stream_id: 流ID
+            
+        Returns:
+            是否满足危险天气条件（天气危险时返回True）
+        """
+        if not self.weather_safety_enabled:
+            return True
+        
+        try:
+            # 获取当前天气信息
+            wind_power, weather_type = self._get_current_weather_info()
+            
+            # 检查风力是否超过阈值
+            is_high_wind = wind_power >= self.wind_power_threshold
+            
+            # 检查天气类型是否包含危险关键词
+            is_dangerous_weather = any(keyword in weather_type for keyword in self.dangerous_weather_keywords)
+            
+            # 判断是否为危险天气
+            is_dangerous = is_high_wind or is_dangerous_weather
+            
+            if is_dangerous:
+                self.logger.info(
+                    f"🌪️ 危险天气条件满足: 风力{wind_power}级 >= 阈值{self.wind_power_threshold}级 或天气包含危险关键词({weather_type})，继续处理检测结果")
+            else:
+                self.logger.debug(
+                    f"☀️ 天气安全: 风力{wind_power}级 < 阈值{self.wind_power_threshold}级 且天气安全({weather_type})，跳过处理")
+            
+            return is_dangerous
+            
+        except Exception as e:
+            self.logger.error(f"天气安全检查失败: {e}")
+            return True  # 出错时默认继续处理
+    
+    def _get_current_weather_info(self) -> Tuple[int, str]:
+        """
+        获取当前天气信息
+        
+        Returns:
+            (风力等级, 天气类型)
+        """
+        try:
+            if hasattr(self, 'weather_safety_api'):
+                # 从天气API获取信息
+                wind_power_str = self.weather_safety_api.get_wind_power()
+                weather_type = self.weather_safety_api.get_weather_type()
+                
+                # 解析风力等级（提取数字）
+                import re
+                wind_match = re.search(r'(\d+)', wind_power_str)
+                wind_power = int(wind_match.group(1)) if wind_match else 0
+                
+                return wind_power, weather_type
+            elif hasattr(self, 'fixed_wind_power') and hasattr(self, 'fixed_weather_type'):
+                # 使用固定值
+                return self.fixed_wind_power, self.fixed_weather_type
+            else:
+                # 默认安全天气
+                return 3, '晴'
+                
+        except Exception as e:
+            self.logger.error(f"获取天气信息失败: {e}")
+            return 3, '晴'  # 默认安全天气
     
     # 注意：逻辑已重构，所有晨会预警处理都整合在 _check_morning_meeting_condition 中

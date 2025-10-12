@@ -1,0 +1,143 @@
+# 防台防汛施工预警系统配置文件
+# 根据天气条件（风力、降雨）判断是否适合施工
+
+# 模型配置 - 使用人员检测模型
+model:
+  # 使用人员检测模型
+  path: "pt_dir/person/best.pt"
+  # 如果没有专门的人员模型，可以使用通用模型
+  # path: "yolov8n.pt"
+
+# 检测参数配置
+detection:
+  # 置信度阈值
+  confidence_threshold: 0.5
+  # IoU阈值
+  iou_threshold: 0.45
+  # 检测图像尺寸
+  image_size: 640
+  # 处理频率（建议1-2帧/秒即可）
+  fps_limit: 1
+  # 最大同时处理的视频流数量
+  max_streams: 10
+  # 自动缩放配置
+  auto_resize: true
+  max_resolution: 640
+  
+  # 只检测人员类别（可选，也可以检测所有目标）
+  target_classes: ["person"]
+  
+  # 自定义类别名称映射
+  custom_class_names:
+    "person": "施工人员"
+  
+  # 启用防台防汛预警
+  custom_type: "weather_safety_alert"
+  
+  # 防台防汛预警配置
+  custom_type_config:
+    enabled: true                    # 启用防台防汛预警
+    wind_power_threshold: 6          # 风力阈值（6级风以上停止施工）
+    weather_source: "api"            # 天气数据源: "api", "fixed"
+    
+    # 危险天气关键词（包含任一关键词即认为危险）
+    dangerous_weather_keywords: 
+      - "特大暴雨"
+      - "大暴雨"
+      - "暴雨"
+      - "台风"
+      - "飓风"
+      - "强风"
+      - "雷暴"
+      - "冰雹"
+    
+    # 天气API配置
+    api_key: "463f3a37789523d2bbbe619be3d03981"  # 高德天气API密钥
+    city: "310000"                   # 城市代码（310000=上海）
+    
+    # 测试用固定值（当weather_source为"fixed"时使用）
+    fixed_wind_power: 8              # 固定风力值（测试用）
+    fixed_weather_type: "大暴雨"     # 固定天气类型（测试用）
+
+# 报警规则配置
+alarm:
+  # 天气预警的最小置信度
+  min_confidence: 0.5
+  # 连续检测帧数 - 天气预警设为1，立即触发
+  consecutive_frames: 1  
+  # 报警冷却时间（秒）- 设置为3600秒（1小时），避免重复告警
+  cooldown_seconds: 3600  
+  # 报警级别
+  levels:
+    low: 0.3
+    medium: 0.5
+    high: 0.7
+  # 支持的报警方式
+  notification_methods:
+    - "callback"  # HTTP回调
+    - "log"       # 日志记录
+
+# 视频流配置
+video_streams:
+  buffer_size: 1           # 减少缓冲，提高实时性
+  connection_timeout: 10
+  reconnect_interval: 5
+  max_reconnect_attempts: 3
+  supported_formats:
+    - "rtsp"
+    - "rtmp"
+    - "http"
+    - "file"
+    - "camera"
+
+# API服务配置
+api:
+  port: 8080
+  host: "0.0.0.0"
+  version: "v1"
+  debug: false
+  cors_origins:
+    - "*"
+
+# 日志配置
+logging:
+  level: "INFO"
+  file_path: "logs/weather_safety.log"
+  max_file_size: 100
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 性能配置
+performance:
+  use_gpu: false
+  gpu_device: 0
+  worker_threads: 2        # 天气检测不需要太多线程
+  memory_limit: 1024
+
+# 存储配置
+storage:
+  save_results: true       # 保存检测结果
+  save_images: true        # 保存图像（用于后续分析）
+  results_path: "results/weather_safety/"
+  images_path: "results/weather_safety/images/"
+  retention_days: 30       # 天气预警记录保存30天
+  save_only_detections: false  # 保存所有帧（包括安全天气的帧）
+  max_saved_files: 10000
+  # 图像质量设置
+  image_format: "jpg"      # 使用JPEG节省空间
+  jpeg_quality: 85         # 中等质量即可
+  png_compression: 6
+  # 视频捕获设置
+  capture_width: 640
+  capture_height: 480
+  capture_fps: 15
+  preferred_codec: "YUYV"
+
+# 防台防汛预警特殊说明:
+# 1. 系统会实时监控天气条件（风力、降雨情况）
+# 2. 当风力达到设定阈值或出现危险天气时，立即触发预警
+# 3. 预警信息会显示在图片上，并发送回调通知
+# 4. 可以通过修改wind_power_threshold来调整风力阈值
+# 5. 可以通过修改dangerous_weather_keywords来调整危险天气关键词
+# 6. 支持使用固定值进行测试（设置weather_source为"fixed"）
+# 7. 逻辑：危险天气时保存预警结果，安全天气时不保存
