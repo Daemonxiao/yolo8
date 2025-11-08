@@ -36,6 +36,7 @@ class StreamConfig:
     alarm_enabled: bool = True
     save_results: bool = False
     tags: List[str] = None
+    model_path: str = ""  # 使用的模型路径（可选）
     
     def __post_init__(self):
         if self.tags is None:
@@ -96,6 +97,9 @@ class StreamManager:
         self.detection_engine.add_detection_callback(self._on_detection_result)
         self.detection_engine.add_alarm_callback(self._on_alarm_event)
         self.detection_engine.add_stream_callback(self._on_stream_event)
+        
+        # 场景管理器（延迟初始化，避免循环依赖）
+        self.scene_manager = None
         
         # 启动监控
         self.start_monitor()
@@ -249,7 +253,8 @@ class StreamManager:
                 success = self.detection_engine.start_detection(
                     stream_id=stream_id,
                     video_source=config.rtsp_url,
-                    custom_params=detection_params
+                    custom_params=detection_params,
+                    model_path=config.model_path if config.model_path else None
                 )
                 
                 if success:

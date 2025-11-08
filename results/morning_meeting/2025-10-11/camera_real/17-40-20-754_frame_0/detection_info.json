@@ -1,0 +1,52 @@
+{
+  "basic_info": {
+    "timestamp": "2025-10-11T17:40:20.754392",
+    "stream_id": "camera_real",
+    "frame_id": 0,
+    "processing_time": 0.8903989791870117,
+    "video_source": "rtmp://ciacgdsp.zjw.sh.gov.cn:11935/live/310187000020000000003101090000118000001331010900001320000056?token=18235ec6734b4cceb02221190b98d5f7"
+  },
+  "stream_info": {
+    "confidence_threshold": 0.5,
+    "iou_threshold": 0.45,
+    "fps_limit": 1,
+    "total_frames_processed": 0,
+    "total_detections": 0
+  },
+  "detection_results": {
+    "total_objects": 1,
+    "objects": [
+      {
+        "id": 1,
+        "class_name": "晨会未召开",
+        "class_id": 9999,
+        "confidence": 1.0,
+        "bbox": {
+          "x1": 0.0,
+          "y1": 0.0,
+          "x2": 100.0,
+          "y2": 50.0,
+          "width": 100.0,
+          "height": 50.0
+        },
+        "center": {
+          "x": 50.0,
+          "y": 25.0
+        },
+        "area": 5000.0
+      }
+    ]
+  },
+  "alarm_info": {
+    "has_alarm": true,
+    "alarm_level": "high",
+    "alarm_objects": [
+      {
+        "object_id": 1,
+        "class_name": "晨会未召开",
+        "confidence": 1.0,
+        "alarm_level": "high"
+      }
+    ]
+  }
+}

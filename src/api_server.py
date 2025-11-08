@@ -71,6 +71,158 @@ class APIServer:
                 'streams': len(self.stream_manager.get_all_streams())
             })
         
+        # ========== 算法查询接口 ==========
+        
+        # 获取支持的算法列表
+        @self.app.route('/api/v1/algorithms', methods=['GET'])
+        def get_algorithms():
+            """获取所有支持的算法"""
+            try:
+                from .model_manager import model_manager
+                
+                # 获取算法配置
+                algorithm_info = self.stream_manager.scene_manager.scene_mapper.get_algorithm_info()
+                
+                # 获取已加载的模型
+                loaded_models = model_manager.get_loaded_models()
+                
+                # 组合信息
+                algorithms = {}
+                for algorithm, info in algorithm_info.items():
+                    model_path = info['model_path']
+                    algorithms[algorithm] = {
+                        'model_path': model_path,
+                        'file_exists': info['exists'],
+                        'model_loaded': model_path in loaded_models
+                    }
+                
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'algorithms': algorithms,
+                        'total': len(algorithms)
+                    }
+                }), 200
+                
+            except Exception as e:
+                self.logger.error(f"获取算法列表异常: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'message': f'服务器内部错误: {str(e)}'
+                }), 500
+        
+        # ========== 场景管理接口 ==========
+        
+        # 场景下发接口
+        @self.app.route('/api/v1/scene/deploy', methods=['POST'])
+        def deploy_scene():
+            """
+            场景下发接口
+            根据场景配置创建监控任务（视频流检测）
+            """
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'message': '请求数据不能为空'
+                    }), 400
+                
+                # 记录接收到的请求
+                self.logger.info(f"收到场景下发请求: {json.dumps(data, ensure_ascii=False)}")
+                
+                # 调用场景管理器处理
+                result = self.stream_manager.scene_manager.deploy_scene(data)
+                
+                if result['success']:
+                    self.logger.info(f"场景下发成功: scene_id={data.get('sceneId')}")
+                    return jsonify(result), 200
+                else:
+                    self.logger.warning(f"场景下发失败: {result.get('message')}")
+                    return jsonify(result), 400
+                    
+            except Exception as e:
+                self.logger.error(f"场景下发异常: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'message': f'服务器内部错误: {str(e)}'
+                }), 500
+        
+        # 场景停止接口
+        @self.app.route('/api/v1/scene/<scene_id>/stop', methods=['POST'])
+        def stop_scene(scene_id: str):
+            """
+            停止场景监控
+            停止指定场景的所有视频流检测
+            """
+            try:
+                self.logger.info(f"收到场景停止请求: scene_id={scene_id}")
+                
+                result = self.stream_manager.scene_manager.stop_scene(scene_id)
+                
+                if result['success']:
+                    self.logger.info(f"场景停止成功: scene_id={scene_id}")
+                    return jsonify(result), 200
+                else:
+                    self.logger.warning(f"场景停止失败: {result.get('message')}")
+                    return jsonify(result), 400
+                    
+            except Exception as e:
+                self.logger.error(f"场景停止异常: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'message': f'服务器内部错误: {str(e)}'
+                }), 500
+        
+        # 获取场景信息
+        @self.app.route('/api/v1/scene/<scene_id>', methods=['GET'])
+        def get_scene_info(scene_id: str):
+            """获取场景详细信息"""
+            try:
+                scene_info = self.stream_manager.scene_manager.get_scene_info(scene_id)
+                
+                if scene_info:
+                    return jsonify({
+                        'success': True,
+                        'data': scene_info
+                    }), 200
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': f'场景不存在: {scene_id}'
+                    }), 404
+                    
+            except Exception as e:
+                self.logger.error(f"获取场景信息异常: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'message': f'服务器内部错误: {str(e)}'
+                }), 500
+        
+        # 获取所有场景
+        @self.app.route('/api/v1/scenes', methods=['GET'])
+        def get_all_scenes():
+            """获取所有场景信息"""
+            try:
+                scenes = self.stream_manager.scene_manager.get_all_scenes()
+                
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'scenes': scenes,
+                        'total': len(scenes)
+                    }
+                }), 200
+                    
+            except Exception as e:
+                self.logger.error(f"获取场景列表异常: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'message': f'服务器内部错误: {str(e)}'
+                }), 500
+        
+        # ========== 系统信息接口 ==========
+        
         # 获取系统信息
         @self.app.route('/api/v1/info', methods=['GET'])
         def get_system_info():

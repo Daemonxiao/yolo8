@@ -1,0 +1,61 @@
+--progress is a global compose flag, better use `docker compose --progress xx build ...
+#1 [internal] load local bake definitions
+#1 reading from stdin 540B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.68kB done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.m.daocloud.io/library/python:3.10-slim
+#3 DONE 0.3s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [1/9] FROM docker.m.daocloud.io/library/python:3.10-slim@sha256:975a1e200a16719060d391eea4ac66ee067d709cc22a32f4ca4737731eae36c0
+#5 resolve docker.m.daocloud.io/library/python:3.10-slim@sha256:975a1e200a16719060d391eea4ac66ee067d709cc22a32f4ca4737731eae36c0 0.0s done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 1.11kB done
+#6 DONE 0.0s
+
+#7 [8/9] COPY src/ ./src/
+#7 CACHED
+
+#8 [2/9] WORKDIR /app
+#8 CACHED
+
+#9 [5/9] COPY requirements.txt .
+#9 CACHED
+
+#10 [3/9] RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null ||     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+#10 CACHED
+
+#11 [4/9] RUN apt-get update && apt-get install -y --no-install-recommends     libgl1     libglib2.0-0     libsm6     libxext6     libxrender-dev     libgomp1     libgstreamer1.0-0     libgstreamer-plugins-base1.0-0     curl     && rm -rf /var/lib/apt/lists/*
+#11 CACHED
+
+#12 [6/9] RUN pip install --no-cache-dir -r requirements.txt     -i https://pypi.tuna.tsinghua.edu.cn/simple     --trusted-host pypi.tuna.tsinghua.edu.cn &&     pip cache purge
+#12 CACHED
+
+#13 [7/9] COPY main.py .
+#13 CACHED
+
+#14 [9/9] RUN mkdir -p logs results pt_dir config
+#14 CACHED
+
+#15 exporting to image
+#15 exporting layers done
+#15 exporting manifest sha256:35c9ebd94a2e36607cfd510cf14247452f3201da99bcef13b6653e491afd2ca8 done
+#15 exporting config sha256:3b59a92199e8a50866481f1bd17d717a5c770f1835422c84dd7b154c38ca2a6a done
+#15 exporting attestation manifest sha256:701568fa23e098fedeec5686de68d3bc744816ef9037eb7e1609ca4ba04dc012 done
+#15 exporting manifest list sha256:eb63a1f764d24e407b1407c20314bc36d88f59ae5a8cd1a1aa5550b423d5a1fb done
+#15 naming to docker.io/library/docker-ai-detection:latest done
+#15 unpacking to docker.io/library/docker-ai-detection:latest done
+#15 DONE 0.1s
+
+#16 resolving provenance for metadata file
+#16 DONE 0.0s
+ docker-ai-detection  Built

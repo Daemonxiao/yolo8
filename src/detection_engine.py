@@ -18,6 +18,7 @@ from ultralytics import YOLO
 import numpy as np
 from .config_manager import config_manager
 from .gaode_weather import GaodeWeather
+from .model_manager import model_manager
 
 
 @dataclass
@@ -30,6 +31,10 @@ class DetectionResult:
     confidence_scores: List[float]
     bbox_count: int
     processing_time: float
+    # 告警图片URL（用于Kafka推送和外部访问）
+    image_url: str = ""
+    # 告警录像URL（预留字段）
+    record_url: str = ""
 
 
 @dataclass
@@ -105,6 +110,10 @@ class DetectionEngine:
         self.png_compression = config_manager.get('storage.png_compression', 1)
         self.capture_width = config_manager.get('storage.capture_width', 640)
         self.capture_height = config_manager.get('storage.capture_height', 480)
+        
+        # 服务器公网URL配置（用于生成告警图片访问地址）
+        self.server_public_url = config_manager.get('server.public_url', 'http://localhost:8080')
+        self.logger.info(f"服务器公网URL: {self.server_public_url}")
 
         # 类别名称映射（可选的中文化）
         self.custom_class_names = config_manager.get('detection.custom_class_names', {}) or {}
@@ -362,7 +371,8 @@ class DetectionEngine:
                 self.logger.error(f"流状态回调函数执行失败: {e}")
 
     def start_detection(self, stream_id: str, video_source: str,
-                        custom_params: Optional[Dict] = None) -> bool:
+                        custom_params: Optional[Dict] = None,
+                        model_path: Optional[str] = None) -> bool:
         """
         开始检测指定视频流
         
@@ -370,6 +380,7 @@ class DetectionEngine:
             stream_id: 视频流唯一标识
             video_source: 视频源（RTSP URL、文件路径等）
             custom_params: 自定义检测参数
+            model_path: 指定使用的模型路径（可选，默认使用配置中的模型）
             
         Returns:
             是否成功启动
@@ -379,6 +390,16 @@ class DetectionEngine:
             return False
 
         try:
+            # 确定使用的模型路径
+            if model_path is None:
+                model_path = self.model_path
+            
+            # 确保模型已加载
+            model = model_manager.get_model(model_path)
+            if model is None:
+                self.logger.error(f"无法加载模型: {model_path}")
+                return False
+            
             # 测试视频源连接
             cap = cv2.VideoCapture(video_source)
             if not cap.isOpened():
@@ -395,6 +416,7 @@ class DetectionEngine:
             stream_info = {
                 'video_source': video_source,
                 'params': params,
+                'model_path': model_path,  # 保存使用的模型路径
                 'start_time': time.time(),
                 'frame_count': 0,
                 'detection_count': 0,
@@ -628,8 +650,16 @@ class DetectionEngine:
             else:
                 detection_frame = frame
 
+            # 获取模型（从流信息或使用默认模型）
+            model_path = stream_info.get('model_path', self.model_path)
+            model = model_manager.get_model(model_path)
+            
+            if model is None:
+                self.logger.error(f"模型未加载: {model_path}")
+                return None
+            
             # 运行推理
-            results = self.model(
+            results = model(
                 detection_frame,
                 conf=params.get('confidence_threshold', 0.5),
                 iou=params.get('iou_threshold', 0.45),
@@ -833,9 +863,14 @@ class DetectionEngine:
             if self.save_results:
                 self._save_detection_info(result, result_dir, stream_info, timestamp)
 
-            # 2. 保存带检测框的图片
+            # 2. 保存带检测框的图片，并生成访问URL
             if self.save_images:
-                self._save_detection_image(result, frame, result_dir, timestamp)
+                relative_path = self._save_detection_image(result, frame, result_dir, timestamp)
+                if relative_path:
+                    # 生成完整的URL（用于Kafka推送和外部访问）
+                    # 格式：http://server-ip/results/2025-11-08/camera_001/14-30-45-123_frame_100/annotated.jpg
+                    result.image_url = f"{self.server_public_url}/results/{relative_path.replace(os.sep, '/')}"
+                    self.logger.debug(f"生成图片URL: {result.image_url}")
 
             self.logger.debug(f"检测结果已保存: {result_dir}")
 
@@ -933,8 +968,13 @@ class DetectionEngine:
             self.logger.error(f"保存检测信息失败: {e}")
 
     def _save_detection_image(self, result: DetectionResult, frame: np.ndarray,
-                              result_dir: str, timestamp: datetime) -> None:
-        """保存带检测框的图片"""
+                              result_dir: str, timestamp: datetime) -> str:
+        """
+        保存带检测框的图片
+        
+        Returns:
+            str: 图片相对路径（用于生成URL）
+        """
         try:
             # 复制原始帧
             annotated_frame = frame.copy()
@@ -1040,9 +1080,15 @@ class DetectionEngine:
                             crop_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
 
                         cv2.imwrite(crop_file, crop, crop_params)
-
+            
+            # 返回annotated图片的相对路径
+            # 从完整路径中提取相对于results_path的路径
+            relative_path = os.path.relpath(annotated_file, self.results_path)
+            return relative_path
+            
         except Exception as e:
             self.logger.error(f"保存检测图片失败: {e}")
+            return ""
 
     def _get_alarm_level_by_confidence(self, confidence: float) -> str:
         """根据置信度获取报警级别"""

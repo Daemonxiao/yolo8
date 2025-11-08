@@ -2,15 +2,19 @@
 
 # 模型配置
 model:
-  # 模型文件路径
-  path: "pt_dir/constuction_waste/best.pt"
-  #path: "yolov8n.pt"
-  # 备用模型配置（可选择不同精度的模型）
-  models:
-    high_accuracy: "pt_dir/constuction_waste/best.pt"
-    lightweight: "yolov8n.pt"
-  # 当前使用的模型类型
-  current_model: "high_accuracy"
+  # 默认模型（用于兼容旧代码）
+  path: "pt_dir/constuction_waste/constuction_waste/best.pt"
+  
+  # 算法模型映射（算法名称 -> 模型路径）
+  # 场景下发时根据 algorithm 字段自动选择模型
+  algorithm_models:
+    "火焰检测": "pt_dir/fire_smoke/best.pt"
+    "人员检测": "pt_dir/person/best.pt"
+    "垃圾分类": "pt_dir/constuction_waste/constuction_waste/best.pt"
+    "裸土检测": "pt_dir/luotu/best.pt"
+  
+  # 是否在启动时预加载所有模型
+  preload_all: true
 
 # 检测参数配置
 detection:
@@ -23,7 +27,7 @@ detection:
   # 处理频率（每秒处理多少帧，0表示处理所有帧）
   fps_limit: 1
   # 最大同时处理的视频流数量
-  max_streams: 10
+  max_streams: 100
   # 自动缩放高分辨率图像以提高性能
   auto_resize: true
   # 自动缩放的最大分辨率（单边）
@@ -128,6 +132,34 @@ api:
   # 允许的跨域来源
   cors_origins:
     - "*"
+
+# 服务器配置（重要！用于生成告警图片/录像URL）⭐
+server:
+  # 服务器公网地址或域名，用于生成可访问的URL
+  # 外部平台将通过此URL访问告警图片和录像
+  public_url: "http://localhost:8080"  # 修改为实际的公网地址，如 "http://ai.example.com"
+  # 如果使用Nginx代理，配置Nginx监听的端口
+  nginx_port: 80  # 或 443 (HTTPS)
+
+# 设备平台配置（重要！必须配置）⭐
+device_platform:
+  # 设备管理平台地址
+  base_url: "http://192.168.1.100:8080"  # 修改为实际的设备平台地址
+  # 接口调用超时时间（秒）
+  timeout: 10
+  # 失败重试次数
+  retry_times: 3
+  # 是否启用（开发调试时可设为false）
+  enabled: true
+
+# Kafka配置（重要！必须配置）⭐
+kafka:
+  # 外部Kafka服务器地址
+  bootstrap_servers: "192.168.1.200:9092"  # 修改为实际的Kafka地址
+  # 告警推送Topic
+  topic: "event-alarm"
+  # 是否启用Kafka推送
+  enabled: true
 
 # 日志配置
 logging:

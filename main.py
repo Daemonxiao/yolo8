@@ -19,6 +19,11 @@ from src.detection_engine import DetectionEngine
 from src.stream_manager import StreamManager
 from src.alarm_system import AlarmSystem
 from src.api_server import APIServer
+from src.model_manager import model_manager
+from src.scene_manager import SceneManager
+from src.scene_mapper import SceneMapper
+from src.device_platform_client import DevicePlatformClient
+from src.heartbeat_manager import HeartbeatManager
 
 
 class VideoDetectionSystem:
@@ -47,6 +52,10 @@ class VideoDetectionSystem:
         self.stream_manager: Optional[StreamManager] = None
         self.alarm_system: Optional[AlarmSystem] = None
         self.api_server: Optional[APIServer] = None
+        self.scene_manager: Optional[SceneManager] = None
+        self.device_client: Optional[DevicePlatformClient] = None
+        self.heartbeat_manager: Optional[HeartbeatManager] = None
+        self.scene_mapper: Optional[SceneMapper] = None
         
         # 系统状态
         self.is_running = False
@@ -115,6 +124,23 @@ class VideoDetectionSystem:
         try:
             self.logger.info("正在初始化系统组件...")
             
+            # 0. 预加载所有模型
+            self.logger.info("预加载AI模型...")
+            algorithm_models = config_manager.get('model.algorithm_models', {})
+            preload_all = config_manager.get('model.preload_all', True)
+            
+            if preload_all and algorithm_models:
+                model_paths = list(set(algorithm_models.values()))  # 去重
+                results = model_manager.preload_models(model_paths)
+                
+                success_count = sum(1 for v in results.values() if v)
+                self.logger.info(f"模型预加载完成: {success_count}/{len(model_paths)} 个模型可用")
+                
+                # 显示已加载的模型
+                for algorithm, model_path in algorithm_models.items():
+                    status = "✓" if results.get(model_path, False) else "✗"
+                    self.logger.info(f"  {status} {algorithm}: {model_path}")
+            
             # 1. 初始化检测引擎
             self.logger.info("初始化检测引擎...")
             self.detection_engine = DetectionEngine()
@@ -127,12 +153,44 @@ class VideoDetectionSystem:
             self.logger.info("初始化流管理器...")
             self.stream_manager = StreamManager(self.detection_engine)
             
-            # 4. 注册报警处理器
+            # 4. 初始化场景相关组件
+            self.logger.info("初始化场景管理组件...")
+            
+            # 4.1 场景映射器
+            self.scene_mapper = SceneMapper()
+            
+            # 4.2 设备平台客户端
+            device_platform_config = config_manager.get('device_platform', {})
+            base_url = device_platform_config.get('base_url', 'http://localhost:8080')
+            timeout = device_platform_config.get('timeout', 10)
+            retry_times = device_platform_config.get('retry_times', 3)
+            
+            self.device_client = DevicePlatformClient(
+                base_url=base_url,
+                timeout=timeout,
+                retry_times=retry_times
+            )
+            
+            # 4.3 心跳管理器
+            self.heartbeat_manager = HeartbeatManager(self.device_client)
+            
+            # 4.4 场景管理器
+            self.scene_manager = SceneManager(
+                device_client=self.device_client,
+                heartbeat_manager=self.heartbeat_manager,
+                scene_mapper=self.scene_mapper,
+                stream_manager=self.stream_manager
+            )
+            
+            # 关联场景管理器到流管理器
+            self.stream_manager.scene_manager = self.scene_manager
+            
+            # 5. 注册报警处理器
             self.detection_engine.add_alarm_callback(
                 self.alarm_system.process_alarm_event
             )
             
-            # 5. 初始化API服务器
+            # 6. 初始化API服务器
             self.logger.info("初始化API服务器...")
             self.api_server = APIServer(self.stream_manager)
             
@@ -189,7 +247,6 @@ class VideoDetectionSystem:
             "实时视频检测系统",
             "=" * 60,
             f"API服务地址: http://{api_config['host']}:{api_config['port']}",
-            f"模型文件: {config_manager.get_model_path()}",
             f"最大流数量: {config_manager.get('detection.max_streams', 10)}",
             f"使用GPU: {config_manager.get('performance.use_gpu', True)}",
             "",
@@ -229,6 +286,14 @@ class VideoDetectionSystem:
             # 关闭API服务器
             if self.api_server:
                 self.api_server.stop()
+            
+            # 关闭场景管理器
+            if self.scene_manager:
+                self.scene_manager.stop()
+            
+            # 关闭心跳管理器
+            if self.heartbeat_manager:
+                self.heartbeat_manager.stop()
             
             # 关闭流管理器
             if self.stream_manager:
