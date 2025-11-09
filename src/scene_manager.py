@@ -179,6 +179,9 @@ class SceneManager:
         # 2. 获取目标检测类别（可选）
         target_classes = self.scene_mapper.get_target_classes_by_algorithm(algorithm)
         
+        # 2.1 获取自定义处理类型（可选）
+        custom_type = self.scene_mapper.get_custom_type_by_algorithm(algorithm)
+        
         # 3. 逐个部署设备
         deployed_devices = []
         failed_devices = []
@@ -201,27 +204,46 @@ class SceneManager:
                 # 3.2 生成内部流ID
                 stream_id = f"scene_{scene}_{device_gb_code}".replace(' ', '_')
                 
-                # 3.3 启动检测任务
-                success = self.stream_manager.add_stream(
-                    stream_config=StreamConfig(
-                        stream_id=stream_id,
-                        rtsp_url=stream_addr.rtsp,
-                        name=f"{scene}_{device_gb_code}",
-                        model_path=model_path,
-                        target_classes=target_classes,
-                        region_str=area,
-                        scene_name=scene
-                    )
+                # 3.3 注册视频流
+                # 从配置文件读取FPS限制（5秒1帧 = 0.2 FPS）
+                from .config_manager import config_manager
+                detection_params = config_manager.get_detection_params()
+                
+                stream_config = StreamConfig(
+                    stream_id=stream_id,
+                    rtsp_url=stream_addr.rtsp,
+                    name=f"{scene}_{device_gb_code}",
+                    description=f"场景: {scene}, 设备: {device_gb_code}",
+                    confidence_threshold=detection_params.get('confidence_threshold', 0.5),
+                    iou_threshold=detection_params.get('iou_threshold', 0.45),
+                    fps_limit=detection_params.get('fps_limit', 1),  # 关键：使用配置的FPS限制
+                    model_path=model_path,
+                    target_classes=target_classes,
+                    custom_type=custom_type if custom_type else "",  # 关键：每个流使用自己的custom_type
+                    alarm_enabled=True,
+                    save_results=True
                 )
                 
-                if not success:
+                register_result = self.stream_manager.register_stream(stream_config)
+                if not register_result.get('success'):
                     failed_devices.append({
                         'deviceGbCode': device_gb_code,
-                        'reason': '启动检测任务失败'
+                        'reason': f"注册流失败: {register_result.get('error', '未知错误')}"
                     })
                     continue
                 
-                # 3.4 启动心跳
+                # 3.4 启动检测
+                start_result = self.stream_manager.start_stream(stream_id)
+                if not start_result.get('success'):
+                    # 启动失败，清理已注册的流
+                    self.stream_manager.unregister_stream(stream_id)
+                    failed_devices.append({
+                        'deviceGbCode': device_gb_code,
+                        'reason': f"启动流失败: {start_result.get('error', '未知错误')}"
+                    })
+                    continue
+                
+                # 3.5 启动心跳
                 self.heartbeat_manager.start_heartbeat(device_gb_code)
                 
                 # 记录部署成功
@@ -242,26 +264,27 @@ class SceneManager:
                     'reason': str(e)
                 })
         
-        # 4. 记录部署信息
-        deployment = SceneDeployment(
-            scene=scene,
-            algorithm=algorithm,
-            start_date=start_date,
-            end_date=end_date,
-            devices=deployed_devices,
-            model_path=model_path,
-            target_classes=target_classes
-        )
-        
+        # 4. 记录部署信息（只有成功部署至少一个设备时才注册）
         deployment_id = f"{scene}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        self.deployments[deployment_id] = deployment
+        
+        if len(deployed_devices) > 0:
+            deployment = SceneDeployment(
+                scene=scene,
+                algorithm=algorithm,
+                start_date=start_date,
+                end_date=end_date,
+                devices=deployed_devices,
+                model_path=model_path,
+                target_classes=target_classes
+            )
+            self.deployments[deployment_id] = deployment
         
         # 5. 返回结果
         result = {
             'status': 0 if len(deployed_devices) > 0 else 1,
             'message': '场景部署成功' if len(deployed_devices) > 0 else '场景部署失败',
             'data': {
-                'deployment_id': deployment_id,
+                'deployment_id': deployment_id if len(deployed_devices) > 0 else None,
                 'deployed_devices': len(deployed_devices),
                 'failed_devices': len(failed_devices),
                 'failed_list': failed_devices
@@ -337,7 +360,10 @@ class SceneManager:
         # 停止所有设备的检测和心跳
         for device_info in deployment.devices:
             if device_info.stream_id:
-                self.stream_manager.remove_stream(device_info.stream_id)
+                # 先停止检测
+                self.stream_manager.stop_stream(device_info.stream_id)
+                # 再注销流
+                self.stream_manager.unregister_stream(device_info.stream_id)
             
             self.heartbeat_manager.stop_heartbeat(device_info.device_gb_code)
         
@@ -346,4 +372,57 @@ class SceneManager:
         
         self.logger.info(f"部署 {deployment_id} 已停止")
         return True
+    
+    # API 兼容方法（别名）
+    def stop_scene(self, scene_id: str) -> Dict:
+        """
+        停止场景（API兼容方法）
+        
+        Args:
+            scene_id: 场景ID（deployment_id）
+            
+        Returns:
+            操作结果
+        """
+        # 先获取设备数
+        deployment = self.deployments.get(scene_id)
+        device_count = len(deployment.devices) if deployment else 0
+        
+        # 停止部署
+        success = self.stop_deployment(scene_id)
+        
+        if success:
+            return {
+                'status': 0,
+                'message': '场景停止成功',
+                'data': {
+                    'stopped_devices': device_count
+                }
+            }
+        else:
+            return {
+                'status': 1,
+                'message': f'场景不存在或已停止: {scene_id}'
+            }
+    
+    def get_scene_info(self, scene_id: str) -> Optional[Dict]:
+        """
+        获取场景信息（API兼容方法）
+        
+        Args:
+            scene_id: 场景ID（deployment_id）
+            
+        Returns:
+            场景信息
+        """
+        return self.get_deployment_info(scene_id)
+    
+    def get_all_scenes(self) -> List[Dict]:
+        """
+        获取所有场景（API兼容方法）
+        
+        Returns:
+            场景列表
+        """
+        return self.list_deployments()
 

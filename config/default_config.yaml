@@ -10,8 +10,25 @@ model:
   algorithm_models:
     "火焰检测": "pt_dir/fire_smoke/best.pt"
     "人员检测": "pt_dir/person/best.pt"
+    "安全帽检测": "pt_dir/helmet/best.pt"
     "垃圾分类": "pt_dir/constuction_waste/constuction_waste/best.pt"
     "裸土检测": "pt_dir/luotu/best.pt"
+  
+  # 算法目标类别映射（可选，用于类别过滤）
+  # 空列表 [] 表示检测所有类别
+  algorithm_classes:
+    "火焰检测": [ "fire", "smoke" ]
+    "人员检测": [ "person" ]
+    "垃圾分类": [ "" ]  # 检测所有垃圾类别
+    "裸土检测": [ "noncovered" ]
+    "安全帽检测": [ "head" ]  # 需要同时检测头部和安全帽
+  
+  # 算法自定义处理类型映射（可选）
+  # 每个算法可以指定自己的 custom_type
+  algorithm_custom_types:
+    "高温预警": "high_temperature_alert"
+    "晨会预警": "morning_meeting_alert"
+    "天气预警": "weather_safety_alert"
   
   # 是否在启动时预加载所有模型
   preload_all: true
@@ -25,6 +42,8 @@ detection:
   # 检测图像尺寸
   image_size: 640
   # 处理频率（每秒处理多少帧，0表示处理所有帧）
+  # 注意：这里是帧率（FPS），不是间隔时间
+  # 每5秒1帧 = 1÷5 = 0.2 FPS
   fps_limit: 1
   # 最大同时处理的视频流数量
   max_streams: 100
@@ -32,31 +51,8 @@ detection:
   auto_resize: true
   # 自动缩放的最大分辨率（单边）
   max_resolution: 640
-  # 类别过滤（只检测指定类别，为空则检测所有类别）
-  target_classes: []
-  # 示例: 只检测人
-  # target_classes: ["person"]
-  # 示例: 只检测人和安全帽
-  # target_classes: ["person", "helmet"]
-  # 自定义类别名称映射（中文化）
-  custom_class_names:
-    "pallet": "托盘"
-    "wires": "电线"
-    "rebar": "钢筋"
-    "cementitious": "水泥材料"
-    "pvc": "PVC材料"
-    "bricks": "砖块"
-    "Disposed Soil": "废弃土壤"
-    "Temporary Soil": "临时土壤"
-    "Roll-Off Dumpster": "垃圾箱"
-    "Roll-off Dumpster": "垃圾箱"
-    "Disposed Gravel": "废弃砂石"
-    "Temporary Gravel": "临时砂石"
-    "Temporary Sand": "临时沙土"
-    "wood": "木材"
-  
   # 自定义处理类型（可选）
-  # 可选值: "", "high_temperature_alert", "morning_meeting_alert", "weather_safety_alert"
+  # 可选值: "", "high_temperature_alert", "morning_meeting_alert", "weather_safety_alert", "helmet_detection_alert"
   custom_type: ""
   
   # 自定义处理配置
@@ -65,20 +61,20 @@ detection:
     temperature_threshold: 35.0    # 高温阈值（摄氏度）
     temperature_source: "api"      # 温度来源: "api", "sensor", "fixed"
     enabled: true                  # 是否启用
-    api_key: ""                    # 天气API密钥
-    city: "北京"                   # 城市名称
+    api_key: "463f3a37789523d2bbbe619be3d03981 "                    # 天气API密钥
+    city: "310000"                   # 城市名称
     fixed_temperature: 25.0        # 固定温度值（当source为"fixed"时使用）
     
     # 安全晨会预警配置（当custom_type为"morning_meeting_alert"时使用）
     meeting_start_time: "08:00"    # 晨会开始时间
     meeting_end_time: "08:30"      # 晨会结束时间
-    weekdays: [0, 1, 2, 3, 4]      # 工作日（0=周一, 6=周日）
-    person_class_names: ["person", "人", "人员"]  # 人员类别名称
+    weekdays: [ 0, 1, 2, 3, 4 ]      # 工作日（0=周一, 6=周日）
+    person_class_names: [ "person", "人", "人员" ]  # 人员类别名称
     
     # 防台防汛施工预警配置（当custom_type为"weather_safety_alert"时使用）
     wind_power_threshold: 6        # 风力阈值（级）
     weather_source: "api"          # 天气数据源: "api", "fixed"
-    dangerous_weather_keywords: ["特大暴雨", "大暴雨", "暴雨", "台风", "飓风", "强风"]  # 危险天气关键词
+    dangerous_weather_keywords: [ "特大暴雨", "大暴雨", "暴雨", "台风", "飓风", "强风" ]  # 危险天气关键词
     fixed_wind_power: 3            # 固定风力值（当source为"fixed"时使用）
     fixed_weather_type: "晴"       # 固定天气类型（当source为"fixed"时使用）
 
@@ -95,11 +91,11 @@ alarm:
     low: 0.3
     medium: 0.5
     high: 0.7
-  # 支持的报警方式
-  notification_methods:
-    - "callback"  # HTTP回调
-    - "log"       # 日志记录
-    - "email"     # 邮件通知（可选）
+  # 告警发送方式（可选值：http, kafka, both）
+  # - http: 只通过HTTP回调发送到设备平台
+  # - kafka: 只通过Kafka推送
+  # - both: 同时使用HTTP和Kafka
+  notification_method: "http"  # 默认同时使用两种方式
 
 # 视频流配置
 video_streams:
@@ -144,7 +140,7 @@ server:
 # 设备平台配置（重要！必须配置）⭐
 device_platform:
   # 设备管理平台地址
-  base_url: "http://192.168.1.100:8080"  # 修改为实际的设备平台地址
+  base_url: "http://127.0.0.1:8081"  # 修改为实际的设备平台地址
   # 接口调用超时时间（秒）
   timeout: 10
   # 失败重试次数
@@ -154,8 +150,8 @@ device_platform:
 
 # Kafka配置（重要！必须配置）⭐
 kafka:
-  # 外部Kafka服务器地址
-  bootstrap_servers: "192.168.1.200:9092"  # 修改为实际的Kafka地址
+  # 外部Kafka服务器地址（注意：这里应该是 Kafka 地址，不是 HTTP 地址）
+  bootstrap_servers: "127.0.0.1:9092"  # 修改为实际的Kafka地址，格式：host:port
   # 告警推送Topic
   topic: "event-alarm"
   # 是否启用Kafka推送

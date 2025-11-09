@@ -37,10 +37,14 @@ class StreamConfig:
     save_results: bool = False
     tags: List[str] = None
     model_path: str = ""  # 使用的模型路径（可选）
+    target_classes: List[str] = None  # 目标检测类别（可选）
+    custom_type: str = ""  # 自定义处理类型（可选，如 "helmet_detection_alert"）
     
     def __post_init__(self):
         if self.tags is None:
             self.tags = []
+        if self.target_classes is None:
+            self.target_classes = []
 
 
 @dataclass
@@ -254,7 +258,9 @@ class StreamManager:
                     stream_id=stream_id,
                     video_source=config.rtsp_url,
                     custom_params=detection_params,
-                    model_path=config.model_path if config.model_path else None
+                    model_path=config.model_path if config.model_path else None,
+                    target_classes=config.target_classes if config.target_classes else None,
+                    custom_type=config.custom_type if config.custom_type else None  # 传递custom_type
                 )
                 
                 if success:

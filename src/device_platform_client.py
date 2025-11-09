@@ -129,4 +129,47 @@ class DevicePlatformClient:
         except Exception as e:
             self.logger.error(f"设备 {device_gb_code} 心跳异常: {e}")
             return False
+    
+    def send_alarm(self, alarm_data: Dict[str, Any]) -> bool:
+        """
+        发送告警事件到设备平台
+        
+        Args:
+            alarm_data: 告警数据字典，包含：
+                - deviceGbCode: 设备国标编码
+                - alarmType: 告警类型
+                - alarmLevel: 告警级别
+                - alarmTime: 告警时间
+                - pic: 告警图片URL
+                - record: 告警录像URL
+                - 其他自定义字段
+        
+        Returns:
+            是否发送成功
+        """
+        url = f"{self.base_url}/event/alarm"
+        
+        try:
+            response = requests.post(
+                url,
+                json=alarm_data,
+                timeout=self.timeout,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            result = response.json()
+            
+            if result.get('status') == 0:
+                self.logger.info(f"告警发送成功: {alarm_data.get('deviceGbCode')}, 类型: {alarm_data.get('alarmType')}")
+                return True
+            else:
+                self.logger.warning(f"告警发送失败: {result.get('message', '未知错误')}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            self.logger.warning(f"告警发送超时: {alarm_data.get('deviceGbCode')}")
+            return False
+        except Exception as e:
+            self.logger.error(f"告警发送异常: {e}")
+            return False
 

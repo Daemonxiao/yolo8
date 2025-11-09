@@ -24,8 +24,42 @@ model:
     "垃圾分类": "pt_dir/constuction_waste/constuction_waste/best.pt"
     "裸土检测": "pt_dir/luotu/best.pt"
   
+  # 算法目标类别过滤（可选）
+  # 空列表 [] 表示检测所有类别
+  algorithm_classes:
+    "火焰检测": ["fire", "smoke"]      # 只检测火和烟
+    "人员检测": ["person"]              # 只检测人
+    "垃圾分类": []                      # 检测所有垃圾类别
+    "裸土检测": []                      # 检测所有类别
+  
   # 是否在启动时预加载所有模型
   preload_all: true
+```
+
+### 🎯 类别过滤说明
+
+**为什么需要类别过滤？**
+
+同一个模型可能训练了多个类别，但实际应用中只需要检测部分类别：
+
+- ✅ **人员检测**：模型可能包含"person"、"helmet"、"vest"，但我们只需要检测"person"
+- ✅ **火焰检测**：只关注"fire"和"smoke"，忽略其他类别
+- ✅ **垃圾分类**：需要检测所有垃圾类别，设置为空列表 `[]`
+
+**配置示例**：
+
+```yaml
+# 示例1: 只检测人，忽略安全帽和反光衣
+algorithm_classes:
+  "人员检测": ["person"]
+
+# 示例2: 检测火和烟
+algorithm_classes:
+  "火焰检测": ["fire", "smoke"]
+
+# 示例3: 检测所有类别（不过滤）
+algorithm_classes:
+  "综合检测": []
 ```
 
 ### 添加新算法
@@ -115,22 +149,26 @@ GET /api/v1/algorithms
       "火焰检测": {
         "model_path": "pt_dir/fire_smoke/best.pt",
         "file_exists": true,
-        "model_loaded": true
+        "model_loaded": true,
+        "target_classes": ["fire", "smoke"]
       },
       "人员检测": {
         "model_path": "pt_dir/person/best.pt",
         "file_exists": true,
-        "model_loaded": true
+        "model_loaded": true,
+        "target_classes": ["person"]
       },
       "垃圾分类": {
         "model_path": "pt_dir/constuction_waste/constuction_waste/best.pt",
         "file_exists": true,
-        "model_loaded": true
+        "model_loaded": true,
+        "target_classes": []
       },
       "裸土检测": {
         "model_path": "pt_dir/luotu/best.pt",
         "file_exists": true,
-        "model_loaded": true
+        "model_loaded": true,
+        "target_classes": []
       }
     },
     "total": 4

@@ -15,6 +15,7 @@ from enum import Enum
 
 from .detection_engine import AlarmEvent
 from .config_manager import config_manager
+from .kafka_publisher import KafkaPublisher
 
 
 class NotificationType(Enum):
@@ -58,9 +59,38 @@ class AlarmRule:
 class AlarmSystem:
     """报警系统"""
     
-    def __init__(self):
-        """初始化报警系统"""
+    def __init__(self, device_client=None, stream_manager=None, kafka_config=None):
+        """
+        初始化报警系统
+        
+        Args:
+            device_client: 设备平台客户端（可选，用于发送告警到设备平台）
+            stream_manager: 流管理器（可选，用于获取流配置和设备编号）
+            kafka_config: Kafka配置（可选，用于推送告警到Kafka）
+        """
         self.logger = logging.getLogger(__name__)
+        
+        # 设备平台客户端和流管理器（延迟初始化）
+        self.device_client = device_client
+        self.stream_manager = stream_manager
+        
+        # 初始化Kafka推送器
+        self.kafka_publisher = None
+        if kafka_config and kafka_config.get('enabled', False):
+            try:
+                self.kafka_publisher = KafkaPublisher(
+                    bootstrap_servers=kafka_config.get('bootstrap_servers', '127.0.0.1:9092'),
+                    topic=kafka_config.get('topic', 'event-alarm'),
+                    enabled=True
+                )
+                self.logger.info("Kafka推送器初始化成功")
+            except Exception as e:
+                self.logger.error(f"Kafka推送器初始化失败: {e}")
+                self.kafka_publisher = None
+        
+        # 告警通知方式配置
+        self.notification_method = config_manager.get('alarm.notification_method', 'both')
+        self.logger.info(f"告警通知方式: {self.notification_method}")
         
         # 报警规则管理
         self.rules: Dict[str, AlarmRule] = {}
@@ -414,10 +444,175 @@ class AlarmSystem:
         self.logger.warning(message)
     
     def _send_callback_notification(self, rule: AlarmRule, alarm_event: AlarmEvent) -> None:
-        """发送HTTP回调通知"""
-        # 这里需要从流配置中获取回调URL
-        # 实际实现中需要与StreamManager协调
-        pass
+        """
+        发送告警通知（支持HTTP回调和Kafka推送）
+        
+        根据配置的 notification_method 决定发送方式：
+        - http: 只通过HTTP回调发送到设备平台
+        - kafka: 只通过Kafka推送
+        - both: 同时使用HTTP和Kafka
+        
+        告警数据格式：
+        {
+            "deviceGbCode": "设备编号",
+            "alarmType": "告警类型",
+            "alarmLevel": "告警级别",
+            "alarmTime": "告警时间",
+            "pic": "告警图片URL",
+            "record": "告警录像URL"
+        }
+        """
+        try:
+            # 从流ID获取设备编号和场景信息
+            device_gb_code, scene_name = self._extract_device_info(alarm_event.stream_id)
+            
+            if not device_gb_code:
+                self.logger.warning(f"无法从流ID {alarm_event.stream_id} 获取设备编号，跳过告警通知")
+                return
+            
+            # 格式化告警时间
+            from datetime import datetime
+            alarm_time_str = datetime.fromtimestamp(alarm_event.timestamp).strftime('%Y-%m-%d %H:%M:%S')
+            alarm_time_obj = datetime.fromtimestamp(alarm_event.timestamp)
+            
+            # 构建告警数据
+            alarm_data = {
+                'deviceGbCode': device_gb_code,
+                'alarmType': alarm_event.class_name,  # 告警类型（检测到的类别）
+                'alarmLevel': alarm_event.alarm_type,  # 告警级别（high/medium/low）
+                'alarmTime': alarm_time_str,
+                'pic': alarm_event.image_url if hasattr(alarm_event, 'image_url') and alarm_event.image_url else '',
+                'record': alarm_event.record_url if hasattr(alarm_event, 'record_url') and alarm_event.record_url else ''
+            }
+            
+            # 根据配置决定发送方式
+            http_success = False
+            kafka_success = False
+            
+            # 发送HTTP回调
+            if self.notification_method in ['http', 'both']:
+                http_success = self._send_http_callback(alarm_data)
+            
+            # 发送Kafka消息
+            if self.notification_method in ['kafka', 'both']:
+                kafka_success = self._send_kafka_message(
+                    scene=scene_name or alarm_event.class_name,
+                    device_gb_code=device_gb_code,
+                    pic_url=alarm_data['pic'],
+                    record_url=alarm_data['record'],
+                    alarm_time=alarm_time_obj
+                )
+            
+            # 记录发送结果
+            if self.notification_method == 'http':
+                status = "成功" if http_success else "失败"
+                self.logger.info(f"告警HTTP回调{status}: {device_gb_code}, 类型: {alarm_event.class_name}")
+            elif self.notification_method == 'kafka':
+                status = "成功" if kafka_success else "失败"
+                self.logger.info(f"告警Kafka推送{status}: {device_gb_code}, 类型: {alarm_event.class_name}")
+            else:  # both
+                self.logger.info(
+                    f"告警通知发送完成: {device_gb_code}, 类型: {alarm_event.class_name} "
+                    f"(HTTP: {'✓' if http_success else '✗'}, Kafka: {'✓' if kafka_success else '✗'})"
+                )
+                
+        except Exception as e:
+            self.logger.error(f"告警通知发送异常: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+    
+    def _extract_device_info(self, stream_id: str) -> tuple:
+        """
+        从流ID中提取设备编号和场景名称
+        
+        Args:
+            stream_id: 流ID，格式: scene_场景名_设备编号
+            
+        Returns:
+            (device_gb_code, scene_name)
+        """
+        device_gb_code = None
+        scene_name = None
+        
+        # 尝试从流ID中提取设备编号
+        if '_' in stream_id:
+            parts = stream_id.split('_')
+            if len(parts) >= 3:
+                # scene_场景名_设备编号
+                scene_name = parts[1]
+                device_gb_code = parts[-1]
+            elif len(parts) == 2:
+                # scene_设备编号
+                device_gb_code = parts[-1]
+        
+        # 如果无法从流ID提取，尝试从流管理器获取
+        if not device_gb_code and self.stream_manager:
+            stream_info = self.stream_manager.get_stream_info(stream_id)
+            if stream_info:
+                # 尝试从流配置中获取设备编号
+                # 这里需要根据实际的数据结构来获取
+                pass
+        
+        return device_gb_code, scene_name
+    
+    def _send_http_callback(self, alarm_data: dict) -> bool:
+        """
+        通过HTTP回调发送告警到设备平台
+        
+        Args:
+            alarm_data: 告警数据
+            
+        Returns:
+            是否发送成功
+        """
+        if not self.device_client:
+            self.logger.warning("设备平台客户端未配置，跳过HTTP回调")
+            return False
+        
+        try:
+            success = self.device_client.send_alarm(alarm_data)
+            return success
+        except Exception as e:
+            self.logger.error(f"HTTP回调发送异常: {e}")
+            return False
+    
+    def _send_kafka_message(
+        self,
+        scene: str,
+        device_gb_code: str,
+        pic_url: str,
+        record_url: str,
+        alarm_time
+    ) -> bool:
+        """
+        通过Kafka推送告警消息
+        
+        Args:
+            scene: 场景名称
+            device_gb_code: 设备编号
+            pic_url: 图片URL
+            record_url: 录像URL
+            alarm_time: 告警时间
+            
+        Returns:
+            是否推送成功
+        """
+        if not self.kafka_publisher:
+            self.logger.warning("Kafka推送器未初始化，跳过Kafka推送")
+            return False
+        
+        try:
+            success = self.kafka_publisher.publish_alarm(
+                scene=scene,
+                device_gb_code=device_gb_code,
+                pic_url=pic_url,
+                record_url=record_url,
+                alarm_time=alarm_time
+            )
+            return success
+        except Exception as e:
+            self.logger.error(f"Kafka推送异常: {e}")
+            return False
     
 
     

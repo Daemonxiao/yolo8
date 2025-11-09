@@ -134,13 +134,19 @@ class HeartbeatManager:
                         self.heartbeat_fail_count.get(device_gb_code, 0) + 1
                     consecutive_failures += 1
                     
+                    # 心跳失败只记录日志，不删除流（心跳仅用于保活）
                     if consecutive_failures >= max_consecutive_failures:
-                        self.logger.error(
-                            f"设备 {device_gb_code} 心跳连续失败{consecutive_failures}次，可能需要重连"
+                        self.logger.warning(
+                            f"设备 {device_gb_code} 心跳连续失败{consecutive_failures}次（仅记录，不影响流）"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"设备 {device_gb_code} 心跳失败（仅记录，不影响流）"
                         )
                 
             except Exception as e:
-                self.logger.error(f"设备 {device_gb_code} 心跳异常: {e}")
+                # 心跳异常只记录日志，不删除流
+                self.logger.warning(f"设备 {device_gb_code} 心跳异常（仅记录，不影响流）: {e}")
                 consecutive_failures += 1
             
             # 等待下次心跳（可被stop_flag中断）

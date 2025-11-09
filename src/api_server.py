@@ -93,7 +93,8 @@ class APIServer:
                     algorithms[algorithm] = {
                         'model_path': model_path,
                         'file_exists': info['exists'],
-                        'model_loaded': model_path in loaded_models
+                        # 'model_loaded': model_path in loaded_models,
+                        # 'target_classes': info.get('target_classes', [])
                     }
                 
                 return jsonify({
@@ -131,11 +132,34 @@ class APIServer:
                 # 记录接收到的请求
                 self.logger.info(f"收到场景下发请求: {json.dumps(data, ensure_ascii=False)}")
                 
-                # 调用场景管理器处理
-                result = self.stream_manager.scene_manager.deploy_scene(data)
+                # 验证必需字段
+                required_fields = ['scene', 'algorithm', 'devices', 'endDate']
+                missing_fields = [f for f in required_fields if f not in data]
+                if missing_fields:
+                    return jsonify({
+                        'status': 1,
+                        'message': f'缺少必需字段: {", ".join(missing_fields)}'
+                    }), 400
                 
-                if result['success']:
-                    self.logger.info(f"场景下发成功: scene_id={data.get('sceneId')}")
+                # 解析参数
+                scene = data.get('scene')
+                algorithm = data.get('algorithm')
+                devices = data.get('devices', [])
+                start_date = data.get('startDate')
+                end_date = data.get('endDate')
+                
+                # 调用场景管理器处理
+                result = self.stream_manager.scene_manager.deploy_scene(
+                    scene=scene,
+                    algorithm=algorithm,
+                    devices=devices,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                
+                # 根据 status 判断成功/失败
+                if result.get('status') == 0:
+                    self.logger.info(f"场景下发成功: scene={scene}, algorithm={algorithm}")
                     return jsonify(result), 200
                 else:
                     self.logger.warning(f"场景下发失败: {result.get('message')}")
@@ -160,7 +184,7 @@ class APIServer:
                 
                 result = self.stream_manager.scene_manager.stop_scene(scene_id)
                 
-                if result['success']:
+                if result.get('status') == 0:
                     self.logger.info(f"场景停止成功: scene_id={scene_id}")
                     return jsonify(result), 200
                 else:
@@ -183,12 +207,13 @@ class APIServer:
                 
                 if scene_info:
                     return jsonify({
-                        'success': True,
+                        'status': 0,
+                        'message': '获取成功',
                         'data': scene_info
                     }), 200
                 else:
                     return jsonify({
-                        'success': False,
+                        'status': 1,
                         'message': f'场景不存在: {scene_id}'
                     }), 404
                     
@@ -207,7 +232,8 @@ class APIServer:
                 scenes = self.stream_manager.scene_manager.get_all_scenes()
                 
                 return jsonify({
-                    'success': True,
+                    'status': 0,
+                    'message': '获取成功',
                     'data': {
                         'scenes': scenes,
                         'total': len(scenes)

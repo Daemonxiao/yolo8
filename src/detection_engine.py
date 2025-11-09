@@ -47,6 +47,8 @@ class AlarmEvent:
     bbox: List[float]  # [x1, y1, x2, y2]
     class_name: str
     consecutive_count: int
+    image_url: str = ""  # 告警图片URL
+    record_url: str = ""  # 告警录像URL（预留）
 
 
 @dataclass
@@ -133,14 +135,15 @@ class DetectionEngine:
         else:
             self.logger.info("未设置类别过滤，将检测所有类别")
 
-        # 自定义处理类型配置
-        self.custom_type = config_manager.get('detection.custom_type', '')
+        # 自定义处理类型配置（全局配置，所有流共享）
+        # 注意：custom_type 现在是每个流独立配置的，不再从全局配置读取
         self.custom_type_config = config_manager.get('detection.custom_type_config', {})
-        if self.custom_type:
-            self.logger.info(f"启用自定义处理类型: {self.custom_type}")
-            self._initialize_custom_handlers()
-        else:
-            self.logger.info("未设置自定义处理类型，使用标准检测流程")
+        
+        # 预加载所有可能的处理器配置（延迟初始化，在第一次使用时初始化）
+        # 这样每个流可以使用不同的 custom_type，但共享配置
+        self._initialized_handlers = set()  # 记录已初始化的处理器类型
+        
+        self.logger.info("自定义处理器配置已加载，将在流启动时按需初始化")
 
         # 确保保存目录存在
         if self.save_results or self.save_images:
@@ -149,24 +152,32 @@ class DetectionEngine:
 
         self.logger.info("检测引擎初始化完成")
 
-    def _initialize_custom_handlers(self) -> None:
-        """初始化自定义处理器"""
+    def _initialize_handler_for_type(self, custom_type: str) -> None:
+        """
+        延迟初始化指定类型的处理器（按需初始化）
+        
+        Args:
+            custom_type: 自定义处理类型
+        """
         try:
-            if self.custom_type == "high_temperature_alert":
+            if custom_type == "high_temperature_alert":
                 # 初始化高温检测处理器
                 self._init_high_temperature_handler()
-            elif self.custom_type == "morning_meeting_alert":
+            elif custom_type == "morning_meeting_alert":
                 # 初始化安全晨会预警处理器
                 self._init_morning_meeting_handler()
-            elif self.custom_type == "weather_safety_alert":
+            elif custom_type == "weather_safety_alert":
                 # 初始化防台防汛施工预警处理器
                 self._init_weather_safety_handler()
+            elif custom_type == "helmet_detection_alert":
+                # 初始化安全帽检测预警处理器
+                self._init_helmet_detection_handler()
 
             # 在这里可以添加更多自定义类型
-            # elif self.custom_type == "other_type":
+            # elif custom_type == "other_type":
             #     self._init_other_handler()
 
-            self.logger.info(f"自定义处理器 [{self.custom_type}] 初始化完成")
+            self.logger.info(f"自定义处理器 [{custom_type}] 初始化完成")
 
         except Exception as e:
             self.logger.error(f"自定义处理器初始化失败: {e}")
@@ -297,6 +308,22 @@ class DetectionEngine:
             self.fixed_wind_power = 3
             self.fixed_weather_type = '晴'
 
+    def _init_helmet_detection_handler(self) -> None:
+        """初始化安全帽检测预警处理器"""
+        # 是否启用安全帽检测
+        self.helmet_detection_enabled = self.custom_type_config.get('helmet_detection_enabled', True)
+        
+        # 人员类别配置
+        self.helmet_person_class_names = self.custom_type_config.get('person_class_names', ['person', '人', '人员'])
+        
+        # 安全帽类别配置
+        self.helmet_class_names = self.custom_type_config.get('helmet_class_names', ['helmet', 'hardhat', '安全帽', '头盔'])
+        
+        self.logger.info(f"安全帽检测预警配置:")
+        self.logger.info(f"  - 启用状态: {self.helmet_detection_enabled}")
+        self.logger.info(f"  - 人员类别: {self.helmet_person_class_names}")
+        self.logger.info(f"  - 安全帽类别: {self.helmet_class_names}")
+
     def _get_device(self) -> str:
         """获取计算设备"""
         if config_manager.get('performance.use_gpu', True) and torch.cuda.is_available():
@@ -372,7 +399,9 @@ class DetectionEngine:
 
     def start_detection(self, stream_id: str, video_source: str,
                         custom_params: Optional[Dict] = None,
-                        model_path: Optional[str] = None) -> bool:
+                        model_path: Optional[str] = None,
+                        target_classes: Optional[List[str]] = None,
+                        custom_type: Optional[str] = None) -> bool:
         """
         开始检测指定视频流
         
@@ -381,6 +410,8 @@ class DetectionEngine:
             video_source: 视频源（RTSP URL、文件路径等）
             custom_params: 自定义检测参数
             model_path: 指定使用的模型路径（可选，默认使用配置中的模型）
+            target_classes: 目标检测类别列表（可选，为空则检测所有类别）
+            custom_type: 自定义处理类型（可选，如 "helmet_detection_alert"）
             
         Returns:
             是否成功启动
@@ -417,6 +448,8 @@ class DetectionEngine:
                 'video_source': video_source,
                 'params': params,
                 'model_path': model_path,  # 保存使用的模型路径
+                'target_classes': target_classes if target_classes else [],  # 目标检测类别
+                'custom_type': custom_type if custom_type else "",  # 自定义处理类型（每个流独立）
                 'start_time': time.time(),
                 'frame_count': 0,
                 'detection_count': 0,
@@ -551,8 +584,8 @@ class DetectionEngine:
                     # 跳过这一帧的处理，但已经清空了缓冲区
                     if frame_id < 5:  # 前5帧记录详细信息
                         elapsed = current_time - last_frame_time
-                        self.logger.info(
-                            f"流 {stream_id} 帧率控制: 跳过帧 (间隔:{elapsed:.3f}s < {frame_interval:.3f}s)")
+                        # self.logger.info(
+                        #     f"流 {stream_id} 帧率控制: 跳过帧 (间隔:{elapsed:.3f}s < {frame_interval:.3f}s)")
                     continue
 
                 # 检查帧是否损坏（全黑或异常小）
@@ -576,9 +609,20 @@ class DetectionEngine:
                     # 自定义处理逻辑 - 根据custom_type决定是否继续处理
                     # 在这里会对result进行修改（删除、添加检测目标等）
                     if self._should_continue_processing(result, stream_id):
-                        # 保存检测结果
+                        # 保存检测结果（会设置 result.image_url）
                         if self.save_results or self.save_images:
                             self._save_detection_result(result, frame, stream_info)
+                        
+                        # 确保告警时总是有图片URL（即使保存失败或没有检测结果）
+                        if not hasattr(result, 'image_url') or not result.image_url:
+                            # 生成图片URL（基于时间戳和流ID）
+                            timestamp = datetime.fromtimestamp(result.timestamp)
+                            date_str = timestamp.strftime('%Y-%m-%d')
+                            time_str = timestamp.strftime('%H-%M-%S-%f')[:-3]
+                            image_filename = 'annotated.png' if self.image_format.lower() == 'png' else 'annotated.jpg'
+                            expected_relative_path = f"{date_str}/{result.stream_id}/{time_str}_frame_{result.frame_id}/{image_filename}"
+                            result.image_url = f"{self.server_public_url}/results/{expected_relative_path}"
+                            self.logger.debug(f"告警前生成图片URL: {result.image_url}")
 
                         # 检查报警条件
                         self._check_alarm_conditions(result)
@@ -650,7 +694,8 @@ class DetectionEngine:
             else:
                 detection_frame = frame
 
-            # 获取模型（从流信息或使用默认模型）
+            # 获取模型（从active_streams中获取模型路径）
+            stream_info = self.active_streams.get(stream_id, {})
             model_path = stream_info.get('model_path', self.model_path)
             model = model_manager.get_model(model_path)
             
@@ -680,12 +725,13 @@ class DetectionEngine:
                     classes = result.boxes.cls.cpu().numpy()
 
                     for i, (box, conf, cls) in enumerate(zip(boxes, confidences, classes)):
-                        # 获取原始类别名称
-                        original_class_name = self.model.names[int(cls)]
+                        # 获取原始类别名称（使用当前模型的类别名称）
+                        original_class_name = model.names[int(cls)]
 
-                        # 类别过滤：如果指定了target_classes，只处理目标类别
-                        if self.target_classes and len(self.target_classes) > 0:
-                            if original_class_name not in self.target_classes:
+                        # 类别过滤：从stream_info中获取target_classes（每个流可能有不同的目标类别）
+                        stream_target_classes = stream_info.get('target_classes', None)
+                        if stream_target_classes and len(stream_target_classes) > 0:
+                            if original_class_name not in stream_target_classes:
                                 continue  # 跳过不在目标类别列表中的检测结果
 
                         # 检查是否有自定义映射
@@ -758,6 +804,17 @@ class DetectionEngine:
                 if (self.alarm_states[stream_id][class_name] >= consecutive_frames and
                         current_time - self.last_alarm_time.get(stream_id, 0) > cooldown_seconds):
 
+                    # 确保告警时有图片URL（如果还没有设置）
+                    if not hasattr(result, 'image_url') or not result.image_url:
+                        # 生成图片URL（基于时间戳和流ID）
+                        timestamp = datetime.fromtimestamp(result.timestamp)
+                        date_str = timestamp.strftime('%Y-%m-%d')
+                        time_str = timestamp.strftime('%H-%M-%S-%f')[:-3]
+                        image_filename = 'annotated.png' if self.image_format.lower() == 'png' else 'annotated.jpg'
+                        expected_relative_path = f"{date_str}/{result.stream_id}/{time_str}_frame_{result.frame_id}/{image_filename}"
+                        result.image_url = f"{self.server_public_url}/results/{expected_relative_path}"
+                        self.logger.warning(f"告警时图片URL为空，已生成URL: {result.image_url}")
+                    
                     # 触发报警
                     alarm_event = AlarmEvent(
                         stream_id=stream_id,
@@ -766,8 +823,13 @@ class DetectionEngine:
                         confidence=detection['confidence'],
                         bbox=detection['bbox'],
                         class_name=class_name,
-                        consecutive_count=self.alarm_states[stream_id][class_name]
+                        consecutive_count=self.alarm_states[stream_id][class_name],
+                        image_url=result.image_url if hasattr(result, 'image_url') and result.image_url else "",  # 从检测结果中获取图片URL
+                        record_url=result.record_url if hasattr(result, 'record_url') and result.record_url else ""  # 从检测结果中获取录像URL
                     )
+                    
+                    # 调试日志
+                    self.logger.info(f"创建告警事件: stream_id={stream_id}, image_url={alarm_event.image_url}")
 
                     # 调用报警回调
                     for callback in self.alarm_callbacks:
@@ -871,6 +933,24 @@ class DetectionEngine:
                     # 格式：http://server-ip/results/2025-11-08/camera_001/14-30-45-123_frame_100/annotated.jpg
                     result.image_url = f"{self.server_public_url}/results/{relative_path.replace(os.sep, '/')}"
                     self.logger.debug(f"生成图片URL: {result.image_url}")
+                else:
+                    # 即使保存失败，也尝试生成URL（基于预期的路径）
+                    # 这样告警时至少有一个URL（即使图片可能不存在）
+                    date_str = timestamp.strftime('%Y-%m-%d')
+                    time_str = timestamp.strftime('%H-%M-%S-%f')[:-3]
+                    image_filename = 'annotated.png' if self.image_format.lower() == 'png' else 'annotated.jpg'
+                    expected_relative_path = f"{date_str}/{result.stream_id}/{time_str}_frame_{result.frame_id}/{image_filename}"
+                    result.image_url = f"{self.server_public_url}/results/{expected_relative_path}"
+                    self.logger.warning(f"图片保存失败，但已生成预期URL: {result.image_url}")
+            else:
+                # 即使不保存图片，也生成URL（基于预期的路径）
+                # 这样告警时至少有一个URL（即使图片可能不存在）
+                date_str = timestamp.strftime('%Y-%m-%d')
+                time_str = timestamp.strftime('%H-%M-%S-%f')[:-3]
+                image_filename = 'annotated.png' if self.image_format.lower() == 'png' else 'annotated.jpg'
+                expected_relative_path = f"{date_str}/{result.stream_id}/{time_str}_frame_{result.frame_id}/{image_filename}"
+                result.image_url = f"{self.server_public_url}/results/{expected_relative_path}"
+                self.logger.debug(f"未保存图片，但已生成预期URL: {result.image_url}")
 
             self.logger.debug(f"检测结果已保存: {result_dir}")
 
@@ -1151,29 +1231,41 @@ class DetectionEngine:
         Returns:
             是否继续处理
         """
+        # 从流的配置中获取 custom_type（每个流独立配置）
+        stream_info = self.active_streams.get(stream_id, {})
+        custom_type = stream_info.get('custom_type', '')
+        
         # 如果没有设置自定义类型，始终继续处理
-        if not self.custom_type:
+        if not custom_type:
             return True
 
         try:
+            # 延迟初始化处理器（第一次使用时初始化）
+            if custom_type not in self._initialized_handlers:
+                self._initialize_handler_for_type(custom_type)
+                self._initialized_handlers.add(custom_type)
+            
             # 根据自定义类型分发到具体处理方法
-            if self.custom_type == "high_temperature_alert":
+            if custom_type == "high_temperature_alert":
                 return self._check_high_temperature_condition(result, stream_id)
-            elif self.custom_type == "morning_meeting_alert":
+            elif custom_type == "morning_meeting_alert":
                 # 晨会预警：检查并修改result，然后决定是否继续处理
                 return self._check_morning_meeting_condition(result, stream_id)
-            elif self.custom_type == "weather_safety_alert":
+            elif custom_type == "weather_safety_alert":
                 # 防台防汛预警：检查天气条件决定是否继续处理
                 return self._check_weather_safety_condition(result, stream_id)
+            elif custom_type == "helmet_detection_alert":
+                # 安全帽检测预警：检查人数和安全帽数量，如果人数>安全帽数则触发告警
+                return self._check_helmet_detection_condition(result, stream_id)
 
             # 这里可以添加更多自定义类型
-            # elif self.custom_type == "low_light_alert":
+            # elif custom_type == "low_light_alert":
             #     return self._check_low_light_condition(result, stream_id)
-            # elif self.custom_type == "motion_detection":
+            # elif custom_type == "motion_detection":
             #     return self._check_motion_condition(result, stream_id)
 
             else:
-                self.logger.warning(f"未知的自定义类型: {self.custom_type}")
+                self.logger.warning(f"未知的自定义类型: {custom_type} (流: {stream_id})")
                 return True  # 默认继续处理
 
         except Exception as e:
@@ -1417,4 +1509,76 @@ class DetectionEngine:
             self.logger.error(f"获取天气信息失败: {e}")
             return 3, '晴'  # 默认安全天气
     
-    # 注意：逻辑已重构，所有晨会预警处理都整合在 _check_morning_meeting_condition 中
+    def _check_helmet_detection_condition(self, result: DetectionResult, stream_id: str) -> bool:
+        """
+        检查安全帽检测条件
+        当检测到人数 > 安全帽数时，说明有人没戴安全帽，触发告警
+        
+        Args:
+            result: 检测结果（会被修改）
+            stream_id: 流ID
+            
+        Returns:
+            是否应该继续处理（保存结果、触发回调等）
+        """
+        if not self.helmet_detection_enabled:
+            return True  # 未启用时，正常处理所有检测结果
+        
+        try:
+            # 统计人员数量
+            person_count = 0
+            helmet_count = 0
+            
+            for detection in result.detections:
+                class_name = detection.get('class_name', '').lower()
+                
+                # 检查是否为人员类别
+                for person_class in self.helmet_person_class_names:
+                    if person_class.lower() in class_name or class_name in person_class.lower():
+                        person_count += 1
+                        break
+                
+                # 检查是否为安全帽类别
+                for helmet_class in self.helmet_class_names:
+                    if helmet_class.lower() in class_name or class_name in helmet_class.lower():
+                        helmet_count += 1
+                        break
+            
+            # 判断是否有人没戴安全帽
+            if person_count > helmet_count:
+                # 有人没戴安全帽，触发告警
+                # 修改检测结果，添加告警信息
+                missing_helmet_count = person_count - helmet_count
+                
+                # 添加虚拟的告警目标到检测结果中
+                alert_detection = {
+                    'id': len(result.detections),
+                    'class_name': f'未戴安全帽({missing_helmet_count}人)',
+                    'class_id': 9998,  # 使用特殊的class_id
+                    'confidence': 1.0,
+                    'bbox': [0, 0, 200, 50],  # 虚拟的边界框，显示在左上角
+                    'center': [100, 25],
+                    'area': 10000
+                }
+                
+                result.detections.append(alert_detection)
+                result.confidence_scores.append(1.0)
+                result.bbox_count = len(result.detections)
+                
+                self.logger.warning(
+                    f"⚠️ 安全帽检测告警: 流 {stream_id} 检测到 {person_count} 人, "
+                    f"但只有 {helmet_count} 个安全帽, {missing_helmet_count} 人未戴安全帽"
+                )
+                return True  # 继续处理，保存告警结果
+            else:
+                # 所有人员都戴了安全帽，正常情况
+                self.logger.debug(
+                    f"✅ 安全帽检测正常: 流 {stream_id} 检测到 {person_count} 人, "
+                    f"{helmet_count} 个安全帽, 符合安全要求"
+                )
+                return True  # 正常情况也继续处理，可以记录日志
+            
+        except Exception as e:
+            self.logger.error(f"安全帽检测检查失败: {e}")
+            return True  # 出错时默认继续处理
+    

@@ -65,6 +65,19 @@ class SceneMapper:
         algorithm_classes = config_manager.get('model.algorithm_classes', {})
         return algorithm_classes.get(algorithm_name)
     
+    def get_custom_type_by_algorithm(self, algorithm_name: str) -> Optional[str]:
+        """
+        根据算法名称获取自定义处理类型（可选）
+        
+        Args:
+            algorithm_name: 算法名称
+            
+        Returns:
+            自定义处理类型，如 "helmet_detection_alert"，如果未配置则返回None
+        """
+        algorithm_custom_types = config_manager.get('model.algorithm_custom_types', {})
+        return algorithm_custom_types.get(algorithm_name)
+    
     def get_all_algorithms(self) -> List[str]:
         """
         获取所有已配置的算法名称
@@ -94,9 +107,12 @@ class SceneMapper:
             算法配置字典
         """
         info = {}
+        algorithm_classes = config_manager.get('model.algorithm_classes', {})
+        
         for algorithm, model_path in self.algorithm_models.items():
             info[algorithm] = {
                 'model_path': model_path,
-                'exists': os.path.exists(model_path)
+                'exists': os.path.exists(model_path),
+                'target_classes': algorithm_classes.get(algorithm, [])
             }
         return info

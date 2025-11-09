@@ -1,7 +1,7 @@
 # 实时视频检测系统依赖包
 
 # 核心依赖
-ultralytics==8.0.227      # YOLO模型
+ultralytics>=8.3.0        # YOLO模型（支持 YOLOv8 和 YOLO11）
 opencv-python==4.11.0.86  # 计算机视觉
 torch>=2.0.0             # 深度学习框架
 torchvision>=0.15.0      # 视觉工具

@@ -145,21 +145,17 @@ class VideoDetectionSystem:
             self.logger.info("初始化检测引擎...")
             self.detection_engine = DetectionEngine()
             
-            # 2. 初始化报警系统
-            self.logger.info("初始化报警系统...")
-            self.alarm_system = AlarmSystem()
-            
-            # 3. 初始化流管理器
+            # 2. 初始化流管理器
             self.logger.info("初始化流管理器...")
             self.stream_manager = StreamManager(self.detection_engine)
             
-            # 4. 初始化场景相关组件
+            # 3. 初始化场景相关组件
             self.logger.info("初始化场景管理组件...")
             
-            # 4.1 场景映射器
+            # 3.1 场景映射器
             self.scene_mapper = SceneMapper()
             
-            # 4.2 设备平台客户端
+            # 3.2 设备平台客户端
             device_platform_config = config_manager.get('device_platform', {})
             base_url = device_platform_config.get('base_url', 'http://localhost:8080')
             timeout = device_platform_config.get('timeout', 10)
@@ -169,6 +165,18 @@ class VideoDetectionSystem:
                 base_url=base_url,
                 timeout=timeout,
                 retry_times=retry_times
+            )
+            
+            # 4. 初始化报警系统（需要设备平台客户端和流管理器）
+            self.logger.info("初始化报警系统...")
+            
+            # 获取Kafka配置
+            kafka_config = config_manager.get('kafka', {})
+            
+            self.alarm_system = AlarmSystem(
+                device_client=self.device_client,
+                stream_manager=self.stream_manager,
+                kafka_config=kafka_config
             )
             
             # 4.3 心跳管理器
