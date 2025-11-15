@@ -130,9 +130,99 @@ class DevicePlatformClient:
             self.logger.error(f"设备 {device_gb_code} 心跳异常: {e}")
             return False
     
+    def upload_alarm_image(self, file) -> Dict[str, Any]:
+        """
+        上传告警图片到设备平台
+        
+        Args:
+            file: 文件对象（Flask request.files中的文件）
+            
+        Returns:
+            {
+                'status': 0/1,
+                'message': '成功/失败信息',
+                'data': {'path': '图片路径'}
+            }
+        """
+        url = f"{self.base_url}/api/file/uploadAlarmImage"
+        
+        try:
+            # 准备文件数据
+            files = {'file': (file.filename, file.stream, file.content_type)}
+            
+            self.logger.info(f"上传告警图片: {file.filename}")
+            
+            response = requests.post(
+                url,
+                files=files,
+                timeout=self.timeout * 2  # 上传文件时间可能较长，增加超时时间
+            )
+            
+            result = response.json()
+            
+            if result.get('status') == 0:
+                path = result.get('data', {}).get('path', '')
+                self.logger.info(f"图片上传成功: {path}")
+                return result
+            else:
+                self.logger.warning(f"图片上传失败: {result.get('message', '未知错误')}")
+                return result
+                
+        except requests.exceptions.Timeout:
+            self.logger.warning("图片上传超时")
+            return {'status': 1, 'message': '上传超时'}
+        except Exception as e:
+            self.logger.error(f"图片上传异常: {e}")
+            return {'status': 1, 'message': f'上传失败: {str(e)}'}
+    
+    def send_alarm_v2(self, alarm_data: Dict[str, Any]) -> bool:
+        """
+        发送告警事件到设备平台（新版，符合外部平台规范）
+        
+        Args:
+            alarm_data: 告警数据字典，包含：
+                - sceneId: 场景ID
+                - deviceGbCode: 设备国标编码
+                - alarmTime: 告警时间
+                - path: 告警图片路径
+        
+        Returns:
+            是否发送成功
+        """
+        # 这个接口是外部平台接收告警的接口，不是我们调用的
+        # 根据文档，外部平台使用 HTTP API 接收告警
+        # 所以这里需要配置外部平台的告警接收接口地址
+        
+        # 从配置中读取告警接收接口地址
+        alarm_url = self.base_url + "/api/alarm/receive"  # 这个需要配置
+        
+        try:
+            response = requests.post(
+                alarm_url,
+                json=alarm_data,
+                timeout=self.timeout,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            result = response.json()
+            
+            if result.get('status') == 0:
+                self.logger.info(f"告警发送成功: sceneId={alarm_data.get('sceneId')}, device={alarm_data.get('deviceGbCode')}")
+                return True
+            else:
+                self.logger.warning(f"告警发送失败: {result.get('message', '未知错误')}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            self.logger.warning(f"告警发送超时: {alarm_data.get('deviceGbCode')}")
+            return False
+        except Exception as e:
+            self.logger.error(f"告警发送异常: {e}")
+            return False
+    
     def send_alarm(self, alarm_data: Dict[str, Any]) -> bool:
         """
-        发送告警事件到设备平台
+        发送告警事件到设备平台（旧版，保持兼容性）
         
         Args:
             alarm_data: 告警数据字典，包含：

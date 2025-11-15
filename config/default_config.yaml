@@ -21,7 +21,7 @@ model:
     "人员检测": [ "person" ]
     "垃圾分类": [ "" ]  # 检测所有垃圾类别
     "裸土检测": [ "noncovered" ]
-    "安全帽检测": [ "head" ]  # 需要同时检测头部和安全帽
+    "安全帽检测": [ "head" ]
   
   # 算法自定义处理类型映射（可选）
   # 每个算法可以指定自己的 custom_type
@@ -36,7 +36,7 @@ model:
 # 检测参数配置
 detection:
   # 置信度阈值（0.0-1.0）
-  confidence_threshold: 0.5
+  confidence_threshold: 0.65
   # IoU阈值（用于非极大值抑制）
   iou_threshold: 0.45
   # 检测图像尺寸
@@ -54,6 +54,9 @@ detection:
   # 自定义处理类型（可选）
   # 可选值: "", "high_temperature_alert", "morning_meeting_alert", "weather_safety_alert", "helmet_detection_alert"
   custom_type: ""
+
+  custom_class_names:
+    "head": "no_helmet"
   
   # 自定义处理配置
   custom_type_config:
@@ -95,7 +98,18 @@ alarm:
   # - http: 只通过HTTP回调发送到设备平台
   # - kafka: 只通过Kafka推送
   # - both: 同时使用HTTP和Kafka
-  notification_method: "http"  # 默认同时使用两种方式
+  notification_method: "http"  # 默认使用HTTP方式
+  
+  # 告警数据格式版本（v1: 旧版格式, v2: 新版符合外部平台规范）
+  # v1: {deviceGbCode, alarmType, alarmLevel, alarmTime, pic, record}
+  # v2: {sceneId, deviceGbCode, alarmTime, path}
+  alarm_format_version: "v2"  # 推荐使用v2新版格式
+  
+  # 是否在推送前上传图片到外部平台（v2格式需要）
+  upload_image_before_alarm: true
+  
+  # 外部平台告警接收接口地址（仅在使用新版格式v2时需要）
+  alarm_receiver_url: "/api/alarm/receive"
 
 # 视频流配置
 video_streams:
@@ -131,16 +145,16 @@ api:
 
 # 服务器配置（重要！用于生成告警图片/录像URL）⭐
 server:
-  # 服务器公网地址或域名，用于生成可访问的URL
-  # 外部平台将通过此URL访问告警图片和录像
-  public_url: "http://localhost:8080"  # 修改为实际的公网地址，如 "http://ai.example.com"
-  # 如果使用Nginx代理，配置Nginx监听的端口
-  nginx_port: 80  # 或 443 (HTTPS)
+  # 服务器公网地址或域名（已废弃，保留用于向后兼容）
+  # 告警图片现在上传到外部设备管理平台，不再使用本地URL
+  public_url: "http://localhost:8081"  # 可选，仅用于本地测试
 
 # 设备平台配置（重要！必须配置）⭐
 device_platform:
   # 设备管理平台地址
-  base_url: "http://127.0.0.1:8081"  # 修改为实际的设备平台地址
+  # Docker 部署时使用 host.docker.internal 访问宿主机服务
+  # 本地运行时使用 127.0.0.1
+  base_url: "http://host.docker.internal:8081"  # 修改为实际的设备平台地址
   # 接口调用超时时间（秒）
   timeout: 10
   # 失败重试次数
@@ -151,7 +165,8 @@ device_platform:
 # Kafka配置（重要！必须配置）⭐
 kafka:
   # 外部Kafka服务器地址（注意：这里应该是 Kafka 地址，不是 HTTP 地址）
-  bootstrap_servers: "127.0.0.1:9092"  # 修改为实际的Kafka地址，格式：host:port
+  # Docker 部署时使用 host.docker.internal 访问宿主机服务
+  bootstrap_servers: "host.docker.internal:9092"  # 修改为实际的Kafka地址，格式：host:port
   # 告警推送Topic
   topic: "event-alarm"
   # 是否启用Kafka推送

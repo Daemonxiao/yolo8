@@ -100,8 +100,6 @@ yolo8/
 │   ├── fire_smoke/best.pt       # 火焰检测模型
 │   ├── person/best.pt           # 人员检测模型
 │   └── ...
-├── nginx/                        # Nginx配置
-│   └── nginx.conf               # Nginx配置文件（新）
 ├── docker/                       # Docker配置
 │   ├── Dockerfile
 │   └── docker-compose.yml
@@ -132,7 +130,6 @@ yolo8/
 
 | 变量名 | 说明 | 示例 |
 |-------|------|------|
-| SERVER_PUBLIC_URL | 服务器公网地址 | `http://ai.example.com` |
 | DEVICE_PLATFORM_URL | 设备平台地址 | `http://192.168.1.100:8080` |
 | KAFKA_BOOTSTRAP_SERVERS | Kafka地址 | `192.168.1.200:9092` |
 | KAFKA_TOPIC | Kafka Topic | `event-alarm` |
@@ -140,7 +137,8 @@ yolo8/
 ### 端口说明
 
 - `8080`: API服务端口
-- `80`: Nginx服务端口（可选）
+
+**注意**：告警图片会自动上传到外部设备管理平台，不需要配置本地Nginx服务器。
 
 ## 📝 许可证
 

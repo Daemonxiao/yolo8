@@ -568,6 +568,11 @@ class DetectionEngine:
             while not stream_info.get('stop_flag', False):
                 current_time = time.time()
 
+                # 检查时间策略（Type 2 和 Type 3）
+                if not self._check_time_strategy(stream_info):
+                    # 当前时间不在允许的检测时段，跳过检测但不停止流
+                    continue
+
                 # 读取最新帧
                 ret, frame = cap.read()
                 if not ret:
@@ -860,6 +865,61 @@ class DetectionEngine:
         else:
             return 'low'
 
+    def _check_time_strategy(self, stream_info: Dict) -> bool:
+        """
+        检查当前时间是否符合检测时间策略（用于Type 2和Type 3）
+        
+        Args:
+            stream_info: 流信息字典，包含时间策略配置
+            
+        Returns:
+            True=当前时间允许检测, False=跳过检测
+        """
+        date_type = stream_info.get('date_type', '1')
+        
+        # Type 1: 完整日期时间范围，无需额外检查（已由start_date/end_date控制）
+        if date_type == '1':
+            return True
+        
+        # Type 2 和 Type 3: 需要检查每日时间段（和月份）
+        daily_time_start = stream_info.get('daily_time_start', '')
+        daily_time_end = stream_info.get('daily_time_end', '')
+        
+        if not daily_time_start or not daily_time_end:
+            # 如果没有配置每日时间段，默认允许检测
+            return True
+        
+        try:
+            from datetime import datetime
+            now = datetime.now()
+            current_month = now.month
+            current_time = now.time()
+            
+            # Type 2: 检查月份
+            if date_type == '2':
+                allowed_months = stream_info.get('allowed_months', [])
+                if allowed_months and current_month not in allowed_months:
+                    # 当前月份不在允许的月份列表中
+                    return False
+            
+            # 检查每日时间段
+            # daily_time_start 格式: "06:00:00"
+            start_time = datetime.strptime(daily_time_start, '%H:%M:%S').time()
+            end_time = datetime.strptime(daily_time_end, '%H:%M:%S').time()
+            
+            # 判断当前时间是否在时间段内
+            if start_time <= end_time:
+                # 正常情况：06:00:00 - 21:00:00
+                return start_time <= current_time <= end_time
+            else:
+                # 跨午夜情况：21:00:00 - 06:00:00
+                return current_time >= start_time or current_time <= end_time
+                
+        except Exception as e:
+            self.logger.error(f"时间策略检查失败: {e}")
+            # 发生错误时，默认允许检测
+            return True
+    
     def _should_reconnect(self, stream_id: str) -> bool:
         """判断是否应该重连"""
         return True
@@ -1106,13 +1166,13 @@ class DetectionEngine:
                             font, 0.5, (255, 255, 255), 1)
 
             # 在图片上添加时间戳和流信息
-            info_text = f"Stream: {result.stream_id} | Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}"
+            info_text = f"Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}"
             cv2.putText(annotated_frame, info_text,
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-            stats_text = f"Frame: {result.frame_id} | Objects: {result.bbox_count} | Processing: {result.processing_time:.3f}s"
-            cv2.putText(annotated_frame, stats_text,
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            # stats_text = f"Frame: {result.frame_id} | Objects: {result.bbox_count} | Processing: {result.processing_time:.3f}s"
+            # cv2.putText(annotated_frame, stats_text,
+            #             (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             # 根据配置选择图像格式和质量
             if self.image_format.lower() == 'png':

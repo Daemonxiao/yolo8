@@ -121,15 +121,6 @@ if docker-compose ps 2>/dev/null | grep -q "ai-detection"; then
         echo -e "${YELLOW}⚠${NC} 服务未在运行状态"
     fi
     
-    # 7. 检查Nginx
-    echo ""
-    echo "7. 检查Nginx服务..."
-    if docker-compose ps | grep -q "nginx.*Up"; then
-        check_status "Nginx服务正在运行"
-    else
-        echo -e "${YELLOW}⚠${NC} Nginx服务未运行"
-    fi
-    
 else
     echo -e "${YELLOW}⚠${NC} 服务未启动"
     echo "  启动服务: cd docker && docker-compose up -d"

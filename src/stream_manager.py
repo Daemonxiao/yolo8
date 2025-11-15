@@ -39,12 +39,20 @@ class StreamConfig:
     model_path: str = ""  # 使用的模型路径（可选）
     target_classes: List[str] = None  # 目标检测类别（可选）
     custom_type: str = ""  # 自定义处理类型（可选，如 "helmet_detection_alert"）
+    scene_id: str = ""  # 场景ID（外部平台的场景ID）
+    # 时间策略配置（用于Type 2和Type 3）
+    date_type: str = ""  # 日期类型: "1", "2", "3"
+    allowed_months: List[int] = None  # 允许的月份列表（Type 2）
+    daily_time_start: str = ""  # 每日开始时间 HH:mm:ss（Type 2和3）
+    daily_time_end: str = ""  # 每日结束时间 HH:mm:ss（Type 2和3）
     
     def __post_init__(self):
         if self.tags is None:
             self.tags = []
         if self.target_classes is None:
             self.target_classes = []
+        if self.allowed_months is None:
+            self.allowed_months = []
 
 
 @dataclass

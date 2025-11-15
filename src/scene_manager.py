@@ -34,6 +34,12 @@ class SceneDeployment:
     devices: List[DeviceInfo]  # 设备列表
     model_path: Optional[str] = None  # 模型路径
     target_classes: Optional[List[str]] = None  # 目标类别
+    # 时间策略配置（用于Type 2和Type 3）
+    date_type: Optional[str] = None  # 日期类型: "1", "2", "3"
+    allowed_months: Optional[List[int]] = None  # 允许的月份列表（Type 2）
+    daily_time_start: Optional[str] = None  # 每日开始时间 HH:mm:ss（Type 2和3）
+    daily_time_end: Optional[str] = None  # 每日结束时间 HH:mm:ss（Type 2和3）
+    scene_id: Optional[str] = None  # 外部场景ID（用于场景启停）
 
 
 class SceneManager:
@@ -62,8 +68,8 @@ class SceneManager:
         self.stream_manager = stream_manager
         self.region_filter = RegionFilter()
         
-        # 部署记录
-        self.deployments: Dict[str, SceneDeployment] = {}  # deployment_id -> deployment
+        # 部署记录（直接使用 sceneId 作为 key）
+        self.deployments: Dict[str, SceneDeployment] = {}  # sceneId -> deployment
         
         # 启动场景到期检查线程
         self.monitor_running = False
@@ -94,8 +100,8 @@ class SceneManager:
                 current_time = datetime.now()
                 expired_scenes = []
                 
-                # 检查所有部署的场景
-                for deployment_id, deployment in self.deployments.items():
+                # 检查所有部署的场景（使用 list() 创建副本，避免遍历时修改字典）
+                for deployment_id, deployment in list(self.deployments.items()):
                     try:
                         # 解析结束时间
                         end_time = datetime.strptime(deployment.end_date, "%Y-%m-%d %H:%M:%S")
@@ -139,7 +145,12 @@ class SceneManager:
         algorithm: str,
         devices: List[Dict],
         start_date: str,
-        end_date: str
+        end_date: str,
+        date_type: str = "1",
+        allowed_months: List[int] = None,
+        daily_time_start: str = "",
+        daily_time_end: str = "",
+        scene_id: str = None  # 新增：外部 sceneId
     ) -> Dict:
         """
         部署场景
@@ -150,11 +161,15 @@ class SceneManager:
             devices: 设备列表，每个设备包含deviceGbCode和area字段
             start_date: 开始时间
             end_date: 结束时间
+            date_type: 日期类型 "1"/"2"/"3"（可选）
+            allowed_months: 允许的月份列表（可选）
+            daily_time_start: 每日开始时间（可选）
+            daily_time_end: 每日结束时间（可选）
             
         Returns:
             部署结果字典
         """
-        self.logger.info(f"开始部署场景: {scene}, 算法: {algorithm}, 设备数: {len(devices)}")
+        self.logger.info(f"开始部署场景: {scene}, 算法: {algorithm}, 设备数: {len(devices)}, 时间类型: {date_type}")
         
         # 1. 根据算法名称获取模型路径（忽略scene字段）
         model_path = self.scene_mapper.get_model_by_algorithm(algorithm)
@@ -220,8 +235,14 @@ class SceneManager:
                     model_path=model_path,
                     target_classes=target_classes,
                     custom_type=custom_type if custom_type else "",  # 关键：每个流使用自己的custom_type
+                    scene_id=scene_id if scene_id else "",  # 关键：保存场景ID用于告警通知
                     alarm_enabled=True,
-                    save_results=True
+                    save_results=True,
+                    # 时间策略配置
+                    date_type=date_type,
+                    allowed_months=allowed_months if allowed_months else [],
+                    daily_time_start=daily_time_start,
+                    daily_time_end=daily_time_end
                 )
                 
                 register_result = self.stream_manager.register_stream(stream_config)
@@ -265,7 +286,11 @@ class SceneManager:
                 })
         
         # 4. 记录部署信息（只有成功部署至少一个设备时才注册）
-        deployment_id = f"{scene}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # 使用 sceneId 作为 key（如果提供），否则生成带时间戳的 ID
+        if scene_id:
+            deployment_id = scene_id
+        else:
+            deployment_id = f"{scene}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         if len(deployed_devices) > 0:
             deployment = SceneDeployment(
@@ -275,7 +300,8 @@ class SceneManager:
                 end_date=end_date,
                 devices=deployed_devices,
                 model_path=model_path,
-                target_classes=target_classes
+                target_classes=target_classes,
+                scene_id=scene_id  # 保存 sceneId
             )
             self.deployments[deployment_id] = deployment
         
@@ -379,31 +405,204 @@ class SceneManager:
         停止场景（API兼容方法）
         
         Args:
-            scene_id: 场景ID（deployment_id）
+            scene_id: 场景ID（外部sceneId，如 "123" 或 123）
             
         Returns:
             操作结果
         """
-        # 先获取设备数
-        deployment = self.deployments.get(scene_id)
-        device_count = len(deployment.devices) if deployment else 0
+        # 转换为字符串
+        scene_id_str = str(scene_id)
         
-        # 停止部署
-        success = self.stop_deployment(scene_id)
+        # 【简化】直接用 scene_id 查找 deployment
+        deployment = self.deployments.get(scene_id_str)
+        
+        if not deployment:
+            return {
+                'status': 1,
+                'message': f'场景不存在或已停止: {scene_id}'
+            }
+        
+        device_count = len(deployment.devices)
+        
+        # 停止部署（deployment_id 就是 scene_id）
+        success = self.stop_deployment(scene_id_str)
         
         if success:
+            self.logger.info(f"场景 {scene_id} 停止成功")
             return {
                 'status': 0,
                 'message': '场景停止成功',
                 'data': {
+                    'scene_id': scene_id,
                     'stopped_devices': device_count
                 }
             }
         else:
             return {
                 'status': 1,
-                'message': f'场景不存在或已停止: {scene_id}'
+                'message': f'场景停止失败: {scene_id}'
             }
+    
+    def deploy_scene_v2(
+        self,
+        scene_id: str,  # 修改：统一使用字符串类型
+        algorithm_code: str,
+        devices: List[Dict],
+        date_type: str,
+        start_time: str,
+        end_time: str,
+        month: List[int] = None,
+    ) -> Dict:
+        """
+        部署场景（新版，符合外部平台规范）
+        
+        根据接入文档要求：每次下发的时候需要先停止，将之前该场景的数据清理，才可以继续下发。
+        
+        Args:
+            scene_id: 场景ID（字符串类型）
+            algorithm_code: 算法编码
+            devices: 设备列表
+            date_type: 日期类型（"1"/"2"/"3"）
+                - "1": start和end为完整日期时间 yyyy-MM-dd HH:mm:ss
+                - "2": month为月份列表，start和end为每日时间段 HH:mm:ss
+                - "3": start和end为每日时间段 HH:mm:ss，永久有效
+            start_time: 开始时间
+            end_time: 结束时间
+            month: 月份列表（type=2时使用）
+            
+        Returns:
+            部署结果
+        """
+        self.logger.info(f"开始部署场景v2: sceneId={scene_id}, algorithmCode={algorithm_code}, type={date_type}")
+        
+        # 【关键】先停止并清理同 sceneId 的旧场景（符合接入文档要求）
+        # scene_id 已经是字符串类型，不需要转换
+        if scene_id in self.deployments:
+            self.logger.info(f"检测到场景 {scene_id} 已存在，先停止旧场景")
+            self.stop_deployment(scene_id)
+        
+        scene_name = f"scene_{scene_id}"
+        
+        # 时间策略配置
+        allowed_months = None
+        daily_time_start = None
+        daily_time_end = None
+        
+        # 根据 date_type 处理时间
+        if date_type == "1":
+            # Type 1: 完整日期时间范围
+            start_date = start_time  # "2024-06-01 10:00:00"
+            end_date = end_time      # "2025-06-01 10:00:00"
+            self.logger.info(f"Type 1: 完整时间范围 {start_date} 至 {end_date}")
+            
+        elif date_type == "2":
+            # Type 2: 指定月份 + 每天的时间段
+            # 例如: month=[5,6,8,9], start="06:00:00", end="21:00:00"
+            # 意思：在5,6,8,9月，每天的06:00-21:00进行检测
+            from datetime import datetime
+            import calendar
+            current_year = datetime.now().year
+            
+            allowed_months = month if month else list(range(1, 13))  # 如果没有指定月份，默认全年
+            daily_time_start = start_time  # "06:00:00"
+            daily_time_end = end_time      # "21:00:00"
+            
+            # 设置一个大致的开始和结束日期（用于到期检查）
+            # 从今年第一个允许的月份开始，到明年最后一个允许的月份结束
+            first_month = min(allowed_months)
+            last_month = max(allowed_months)
+            start_date = f"{current_year}-{first_month:02d}-01 00:00:00"
+            # 设置为明年，因为是循环的，使用正确的月份天数
+            last_day = calendar.monthrange(current_year + 1, last_month)[1]
+            end_date = f"{current_year + 1}-{last_month:02d}-{last_day} 23:59:59"
+            
+            self.logger.info(
+                f"Type 2: 月份={allowed_months}, 每日时间段={daily_time_start}-{daily_time_end}"
+            )
+            
+        else:  # date_type == "3"
+            # Type 3: 每天的时间段，永久有效
+            # 例如: start="06:00:00", end="21:00:00"
+            # 意思：每天的06:00-21:00进行检测，永久有效
+            from datetime import datetime
+            
+            daily_time_start = start_time  # "06:00:00"
+            daily_time_end = end_time      # "21:00:00"
+            
+            # 永久有效：设置为从现在开始，100年后结束
+            today = datetime.now().strftime('%Y-%m-%d')
+            start_date = f"{today} 00:00:00"
+            future_year = datetime.now().year + 100
+            end_date = f"{future_year}-12-31 23:59:59"
+            
+            self.logger.info(
+                f"Type 3: 每日时间段={daily_time_start}-{daily_time_end}, 永久有效"
+            )
+        
+        # 调用原有的 deploy_scene 方法，传递时间策略和 sceneId
+        result = self.deploy_scene(
+            scene=scene_name,
+            algorithm=algorithm_code,
+            devices=devices,
+            start_date=start_date,
+            end_date=end_date,
+            date_type=date_type,
+            allowed_months=allowed_months,
+            daily_time_start=daily_time_start,
+            daily_time_end=daily_time_end,
+            scene_id=scene_id  # scene_id 已经是字符串
+        )
+        
+        # 更新时间策略到部署信息中
+        if result.get('status') == 0 and scene_id in self.deployments:
+            deployment = self.deployments[scene_id]
+            deployment.date_type = date_type
+            deployment.allowed_months = allowed_months
+            deployment.daily_time_start = daily_time_start
+            deployment.daily_time_end = daily_time_end
+            
+            self.logger.info(
+                f"场景部署成功: sceneId={scene_id}, "
+                f"type={date_type}, months={allowed_months}, "
+                f"daily={daily_time_start}-{daily_time_end}"
+            )
+        
+        return result
+    
+    def start_scene(self, scene_id: str) -> Dict:
+        """
+        启动场景
+        
+        Args:
+            scene_id: 场景ID（外部sceneId，如 "123" 或 123）
+            
+        Returns:
+            操作结果
+        """
+        # 转换为字符串
+        scene_id_str = str(scene_id)
+        
+        # 直接查找 deployment
+        deployment = self.deployments.get(scene_id_str)
+        
+        if not deployment:
+            return {
+                'status': 1,
+                'message': f'场景不存在: {scene_id}'
+            }
+        
+        # 场景已经在运行，返回成功
+        # 注意：场景下发后自动启动，start_scene 主要用于重新启动已暂停的场景
+        self.logger.info(f"场景 {scene_id} 启动请求，当前已在运行")
+        
+        return {
+            'status': 0,
+            'message': '场景启动成功',
+            'data': {
+                'scene_id': scene_id,
+                'device_count': len(deployment.devices)
+            }
+        }
     
     def get_scene_info(self, scene_id: str) -> Optional[Dict]:
         """

@@ -51,10 +51,6 @@ class APIServer:
         self.server_thread: Optional[threading.Thread] = None
         self.is_running = False
         
-        # 回调错误计数（用于熔断机制）
-        self.callback_error_counts: Dict[str, int] = {}  # stream_id -> error_count
-        self.callback_disabled: Dict[str, bool] = {}     # stream_id -> is_disabled
-        
         self.logger.info("API服务器初始化完成")
     
     def _register_routes(self) -> None:
@@ -74,7 +70,7 @@ class APIServer:
         # ========== 算法查询接口 ==========
         
         # 获取支持的算法列表
-        @self.app.route('/api/v1/algorithms', methods=['GET'])
+        @self.app.route('/api/algorithms', methods=['GET'])
         def get_algorithms():
             """获取所有支持的算法"""
             try:
@@ -114,18 +110,22 @@ class APIServer:
         
         # ========== 场景管理接口 ==========
         
-        # 场景下发接口
-        @self.app.route('/api/v1/scene/deploy', methods=['POST'])
-        def deploy_scene():
+        # 场景下发接口（新版，符合外部平台要求）
+        @self.app.route('/api/sceneIssue', methods=['POST'])
+        def scene_issue():
             """
-            场景下发接口
-            根据场景配置创建监控任务（视频流检测）
+            算法场景下发接口（符合外部平台规范）
+            
+            支持三种日期类型：
+            - type=1: 指定开始和结束的日期时间
+            - type=2: 指定月份和每天的时间段
+            - type=3: 指定每天的时间段
             """
             try:
                 data = request.get_json()
                 if not data:
                     return jsonify({
-                        'success': False,
+                        'status': 1,
                         'message': '请求数据不能为空'
                     }), 400
                 
@@ -133,7 +133,7 @@ class APIServer:
                 self.logger.info(f"收到场景下发请求: {json.dumps(data, ensure_ascii=False)}")
                 
                 # 验证必需字段
-                required_fields = ['scene', 'algorithm', 'devices', 'endDate']
+                required_fields = ['devices', 'sceneId', 'algorithmCode', 'type', 'start', 'end']
                 missing_fields = [f for f in required_fields if f not in data]
                 if missing_fields:
                     return jsonify({
@@ -142,24 +142,49 @@ class APIServer:
                     }), 400
                 
                 # 解析参数
-                scene = data.get('scene')
-                algorithm = data.get('algorithm')
+                scene_id = str(data.get('sceneId'))  # 统一转换为字符串
+                algorithm_code = data.get('algorithmCode')
                 devices = data.get('devices', [])
-                start_date = data.get('startDate')
-                end_date = data.get('endDate')
+                date_type = str(data.get('type'))  # 统一转换为字符串
+                start_time = data.get('start')
+                end_time = data.get('end')
+                month = data.get('month', [])
+                
+                # 验证设备列表不为空
+                if not devices:
+                    return jsonify({
+                        'status': 1,
+                        'message': '设备列表不能为空'
+                    }), 400
+                
+                # Type 2 时验证 month
+                if date_type == "2" and not month:
+                    return jsonify({
+                        'status': 1,
+                        'message': 'type=2时，month字段不能为空'
+                    }), 400
+                
+                # 验证 date_type 有效性
+                if date_type not in ["1", "2", "3"]:
+                    return jsonify({
+                        'status': 1,
+                        'message': 'type参数错误，必须为1、2或3'
+                    }), 400
                 
                 # 调用场景管理器处理
-                result = self.stream_manager.scene_manager.deploy_scene(
-                    scene=scene,
-                    algorithm=algorithm,
+                result = self.stream_manager.scene_manager.deploy_scene_v2(
+                    scene_id=scene_id,
+                    algorithm_code=algorithm_code,
                     devices=devices,
-                    start_date=start_date,
-                    end_date=end_date
+                    date_type=date_type,
+                    start_time=start_time,
+                    end_time=end_time,
+                    month=month,
                 )
                 
-                # 根据 status 判断成功/失败
+                # 返回结果
                 if result.get('status') == 0:
-                    self.logger.info(f"场景下发成功: scene={scene}, algorithm={algorithm}")
+                    self.logger.info(f"场景下发成功: sceneId={scene_id}, algorithmCode={algorithm_code}")
                     return jsonify(result), 200
                 else:
                     self.logger.warning(f"场景下发失败: {result.get('message')}")
@@ -168,66 +193,127 @@ class APIServer:
             except Exception as e:
                 self.logger.error(f"场景下发异常: {e}", exc_info=True)
                 return jsonify({
-                    'success': False,
+                    'status': 1,
                     'message': f'服务器内部错误: {str(e)}'
                 }), 500
         
-        # 场景停止接口
-        @self.app.route('/api/v1/scene/<scene_id>/stop', methods=['POST'])
-        def stop_scene(scene_id: str):
+        # 场景启停接口
+        @self.app.route('/api/sceneStartStop', methods=['POST'])
+        def scene_start_stop():
             """
-            停止场景监控
-            停止指定场景的所有视频流检测
+            场景启停接口
+            
+            参数：
+            - sceneId: 场景ID
+            - status: 启动(1)或停止(0)
             """
             try:
-                self.logger.info(f"收到场景停止请求: scene_id={scene_id}")
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'status': 1,
+                        'message': '请求数据不能为空'
+                    }), 400
                 
-                result = self.stream_manager.scene_manager.stop_scene(scene_id)
+                scene_id = data.get('sceneId')
+                status = data.get('status')
+                
+                # 验证必需字段
+                if scene_id is None or status is None:
+                    return jsonify({
+                        'status': 1,
+                        'message': '缺少必需字段: sceneId 或 status'
+                    }), 400
+                
+                # 统一转换类型
+                scene_id = str(scene_id)
+                
+                # 转换和验证 status
+                try:
+                    status = int(status)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        'status': 1,
+                        'message': 'status必须为整数0或1'
+                    }), 400
+                
+                if status not in [0, 1]:
+                    return jsonify({
+                        'status': 1,
+                        'message': 'status参数错误，必须为0或1'
+                    }), 400
+                
+                self.logger.info(f"收到场景启停请求: sceneId={scene_id}, status={status}")
+                
+                if status == 1:
+                    # 启动场景
+                    result = self.stream_manager.scene_manager.start_scene(scene_id)
+                else:  # status == 0
+                    # 停止场景
+                    result = self.stream_manager.scene_manager.stop_scene(scene_id)
                 
                 if result.get('status') == 0:
-                    self.logger.info(f"场景停止成功: scene_id={scene_id}")
+                    action = "启动" if status == 1 else "停止"
+                    self.logger.info(f"场景{action}成功: sceneId={scene_id}")
                     return jsonify(result), 200
                 else:
-                    self.logger.warning(f"场景停止失败: {result.get('message')}")
                     return jsonify(result), 400
                     
             except Exception as e:
-                self.logger.error(f"场景停止异常: {e}", exc_info=True)
+                self.logger.error(f"场景启停异常: {e}", exc_info=True)
                 return jsonify({
-                    'success': False,
+                    'status': 1,
                     'message': f'服务器内部错误: {str(e)}'
                 }), 500
         
-        # 获取场景信息
-        @self.app.route('/api/v1/scene/<scene_id>', methods=['GET'])
-        def get_scene_info(scene_id: str):
-            """获取场景详细信息"""
+        # 图片上传接口
+        @self.app.route('/api/file/uploadAlarmImage', methods=['POST'])
+        def upload_alarm_image():
+            """
+            上传告警图片接口
+            
+            这是一个代理接口，将图片转发到外部平台
+            """
             try:
-                scene_info = self.stream_manager.scene_manager.get_scene_info(scene_id)
-                
-                if scene_info:
-                    return jsonify({
-                        'status': 0,
-                        'message': '获取成功',
-                        'data': scene_info
-                    }), 200
-                else:
+                # 检查是否有文件
+                if 'file' not in request.files:
                     return jsonify({
                         'status': 1,
-                        'message': f'场景不存在: {scene_id}'
-                    }), 404
+                        'message': '未找到文件'
+                    }), 400
+                
+                file = request.files['file']
+                
+                if file.filename == '':
+                    return jsonify({
+                        'status': 1,
+                        'message': '文件名为空'
+                    }), 400
+                
+                # 调用设备平台客户端上传图片
+                result = self.stream_manager.scene_manager.device_client.upload_alarm_image(file)
+                
+                if result.get('status') == 0:
+                    self.logger.info(f"图片上传成功: {result.get('data', {}).get('path')}")
+                    return jsonify(result), 200
+                else:
+                    self.logger.warning(f"图片上传失败: {result.get('message')}")
+                    return jsonify(result), 400
                     
             except Exception as e:
-                self.logger.error(f"获取场景信息异常: {e}", exc_info=True)
+                self.logger.error(f"图片上传异常: {e}", exc_info=True)
                 return jsonify({
-                    'success': False,
+                    'status': 1,
                     'message': f'服务器内部错误: {str(e)}'
                 }), 500
         
-        # 获取所有场景
-        @self.app.route('/api/v1/scenes', methods=['GET'])
-        def get_all_scenes():
-            """获取所有场景信息"""
+        # 获取场景列表
+        @self.app.route('/api/scenes', methods=['GET'])
+        def get_scenes():
+            """
+            获取所有场景列表
+            用于查询当前系统中的所有场景状态
+            """
             try:
                 scenes = self.stream_manager.scene_manager.get_all_scenes()
                 
@@ -243,265 +329,18 @@ class APIServer:
             except Exception as e:
                 self.logger.error(f"获取场景列表异常: {e}", exc_info=True)
                 return jsonify({
-                    'success': False,
+                    'status': 1,
                     'message': f'服务器内部错误: {str(e)}'
                 }), 500
         
-        # ========== 系统信息接口 ==========
-        
-        # 获取系统信息
-        @self.app.route('/api/v1/info', methods=['GET'])
-        def get_system_info():
-            """获取系统信息"""
-            try:
-                stats = self.stream_manager.get_stream_stats()
-                return jsonify({
-                    'success': True,
-                    'data': {
-                        'system_info': stats,
-                        'config': {
-                            'max_streams': config_manager.get('detection.max_streams', 10),
-                            'model_path': config_manager.get_model_path(),
-                            'detection_params': config_manager.get_detection_params()
-                        }
-                    }
-                })
-            except Exception as e:
-                self.logger.error(f"获取系统信息失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 注册视频流
-        @self.app.route('/api/v1/streams', methods=['POST'])
-        def register_stream():
-            """注册新的视频流"""
-            try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({
-                        'success': False,
-                        'error': '请求数据不能为空'
-                    }), 400
-                
-                # 验证必需字段
-                required_fields = ['stream_id', 'rtsp_url']
-                for field in required_fields:
-                    if field not in data:
-                        return jsonify({
-                            'success': False,
-                            'error': f'缺少必需字段: {field}'
-                        }), 400
-                
-                # 创建流配置
-                config = StreamConfig(
-                    stream_id=data['stream_id'],
-                    rtsp_url=data['rtsp_url'],
-                    name=data.get('name', ''),
-                    description=data.get('description', ''),
-                    confidence_threshold=data.get('confidence_threshold', 0.5),
-                    iou_threshold=data.get('iou_threshold', 0.45),
-                    fps_limit=data.get('fps_limit', 1),
-                    callback_url=data.get('callback_url', ''),
-                    alarm_enabled=data.get('alarm_enabled', True),
-                    save_results=data.get('save_results', False),
-                    tags=data.get('tags', [])
-                )
-                
-                # 注册流
-                result = self.stream_manager.register_stream(config)
-                
-                # 注册回调函数（如果提供了callback_url）
-                if result['success'] and config.callback_url:
-                    self._register_stream_callbacks(config.stream_id, config.callback_url)
-                
-                return jsonify(result), 200 if result['success'] else 400
-                
-            except Exception as e:
-                self.logger.error(f"注册视频流失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 删除视频流
-        @self.app.route('/api/v1/streams/<stream_id>', methods=['DELETE'])
-        def unregister_stream(stream_id: str):
-            """删除视频流"""
-            try:
-                result = self.stream_manager.unregister_stream(stream_id)
-                return jsonify(result), 200 if result['success'] else 400
-                
-            except Exception as e:
-                self.logger.error(f"删除视频流失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 启动视频流
-        @self.app.route('/api/v1/streams/<stream_id>/start', methods=['POST'])
-        def start_stream(stream_id: str):
-            """启动视频流检测"""
-            try:
-                result = self.stream_manager.start_stream(stream_id)
-                return jsonify(result), 200 if result['success'] else 400
-                
-            except Exception as e:
-                self.logger.error(f"启动视频流失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 停止视频流
-        @self.app.route('/api/v1/streams/<stream_id>/stop', methods=['POST'])
-        def stop_stream(stream_id: str):
-            """停止视频流检测"""
-            try:
-                result = self.stream_manager.stop_stream(stream_id)
-                return jsonify(result), 200 if result['success'] else 400
-                
-            except Exception as e:
-                self.logger.error(f"停止视频流失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 获取视频流信息
-        @self.app.route('/api/v1/streams/<stream_id>', methods=['GET'])
-        def get_stream_info(stream_id: str):
-            """获取视频流详细信息"""
-            try:
-                stream_info = self.stream_manager.get_stream_info(stream_id)
-                if stream_info is None:
-                    return jsonify({
-                        'success': False,
-                        'error': f'流ID不存在: {stream_id}'
-                    }), 404
-                
-                return jsonify({
-                    'success': True,
-                    'data': stream_info
-                })
-                
-            except Exception as e:
-                self.logger.error(f"获取视频流信息失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 获取所有视频流
-        @self.app.route('/api/v1/streams', methods=['GET'])
-        def get_all_streams():
-            """获取所有视频流信息"""
-            try:
-                streams = self.stream_manager.get_all_streams()
-                return jsonify({
-                    'success': True,
-                    'data': {
-                        'streams': streams,
-                        'total': len(streams)
-                    }
-                })
-                
-            except Exception as e:
-                self.logger.error(f"获取视频流列表失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 更新视频流配置
-        @self.app.route('/api/v1/streams/<stream_id>/config', methods=['PUT'])
-        def update_stream_config(stream_id: str):
-            """更新视频流配置"""
-            try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({
-                        'success': False,
-                        'error': '请求数据不能为空'
-                    }), 400
-                
-                result = self.stream_manager.update_stream_config(stream_id, data)
-                return jsonify(result), 200 if result['success'] else 400
-                
-            except Exception as e:
-                self.logger.error(f"更新视频流配置失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 获取统计信息
-        @self.app.route('/api/v1/stats', methods=['GET'])
-        def get_stats():
-            """获取系统统计信息"""
-            try:
-                stats = self.stream_manager.get_stream_stats()
-                return jsonify({
-                    'success': True,
-                    'data': stats
-                })
-                
-            except Exception as e:
-                self.logger.error(f"获取统计信息失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        # 配置管理
-        @self.app.route('/api/v1/config', methods=['GET'])
-        def get_config():
-            """获取系统配置"""
-            try:
-                return jsonify({
-                    'success': True,
-                    'data': {
-                        'detection_params': config_manager.get_detection_params(),
-                        'alarm_config': config_manager.get_alarm_config(),
-                        'api_config': config_manager.get_api_config(),
-                        'model_path': config_manager.get_model_path()
-                    }
-                })
-                
-            except Exception as e:
-                self.logger.error(f"获取配置失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-        
-        @self.app.route('/api/v1/config', methods=['PUT'])
-        def update_config():
-            """更新系统配置"""
-            try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({
-                        'success': False,
-                        'error': '请求数据不能为空'
-                    }), 400
-                
-                # 更新配置
-                config_manager.update_config(data)
-                
-                return jsonify({
-                    'success': True,
-                    'message': '配置更新成功'
-                })
-                
-            except Exception as e:
-                self.logger.error(f"更新配置失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
+        # ========== 内部管理接口（已删除）==========
+        # 根据接入文档要求，以下内部管理接口已删除：
+        # - /api/v1/streams/* (流管理)
+        # - /api/v1/stats (统计信息)
+        # - /api/v1/info (系统信息)
+        # - /api/v1/config (配置管理)
+        # 
+        # 如需内部调试，请查看日志或使用场景查询接口
         
         # 错误处理
         @self.app.errorhandler(404)
@@ -525,99 +364,8 @@ class APIServer:
                 'error': '服务器内部错误'
             }), 500
     
-    def _register_stream_callbacks(self, stream_id: str, callback_url: str) -> None:
-        """注册流的回调函数"""
-        def detection_callback(result: DetectionResult):
-            """检测结果回调"""
-            # 检查回调是否被禁用（熔断）
-            if self.callback_disabled.get(stream_id, False):
-                return
-            
-            try:
-                payload = {
-                    'type': 'detection',
-                    'stream_id': result.stream_id,
-                    'timestamp': result.timestamp,
-                    'frame_id': result.frame_id,
-                    'detections': result.detections,
-                    'bbox_count': result.bbox_count,
-                    'processing_time': result.processing_time
-                }
-                
-                response = requests.post(
-                    callback_url,
-                    json=payload,
-                    timeout=5,
-                    headers={'Content-Type': 'application/json'}
-                )
-                
-                if response.status_code != 200:
-                    self._handle_callback_error(stream_id, f"状态码: {response.status_code}")
-                else:
-                    # 成功回调，重置错误计数
-                    self.callback_error_counts[stream_id] = 0
-                
-            except Exception as e:
-                self._handle_callback_error(stream_id, str(e))
-        
-        def alarm_callback(alarm: AlarmEvent):
-            """报警事件回调"""
-            try:
-                payload = {
-                    'type': 'alarm',
-                    'stream_id': alarm.stream_id,
-                    'timestamp': alarm.timestamp,
-                    'alarm_type': alarm.alarm_type,
-                    'confidence': alarm.confidence,
-                    'bbox': alarm.bbox,
-                    'class_name': alarm.class_name,
-                    'consecutive_count': alarm.consecutive_count
-                }
-                
-                response = requests.post(
-                    callback_url,
-                    json=payload,
-                    timeout=5,
-                    headers={'Content-Type': 'application/json'}
-                )
-                
-                if response.status_code != 200:
-                    self.logger.warning(
-                        f"报警回调响应异常: {stream_id}, "
-                        f"状态码: {response.status_code}"
-                    )
-                
-            except Exception as e:
-                self.logger.error(f"报警回调发送失败: {stream_id}, {e}")
-        
-        # 注册回调
-        self.stream_manager.register_callback(stream_id, 'detection', detection_callback)
-        self.stream_manager.register_callback(stream_id, 'alarm', alarm_callback)
-        
-        self.logger.info(f"已注册回调函数: {stream_id} -> {callback_url}")
-    
-    def _handle_callback_error(self, stream_id: str, error_msg: str) -> None:
-        """处理回调错误（熔断机制）"""
-        # 增加错误计数
-        current_count = self.callback_error_counts.get(stream_id, 0)
-        self.callback_error_counts[stream_id] = current_count + 1
-        
-        # 检查是否需要熔断
-        if self.callback_error_counts[stream_id] >= 10:  # 连续10次错误后熔断
-            self.callback_disabled[stream_id] = True
-            self.logger.error(
-                f"流 {stream_id} 回调连续失败{self.callback_error_counts[stream_id]}次，已禁用回调: {error_msg}"
-            )
-        elif self.callback_error_counts[stream_id] % 3 == 0:  # 每3次错误记录一次
-            self.logger.warning(
-                f"流 {stream_id} 回调错误 ({self.callback_error_counts[stream_id]}/10): {error_msg}"
-            )
-    
-    def enable_stream_callback(self, stream_id: str) -> None:
-        """重新启用流的回调（手动恢复）"""
-        self.callback_disabled[stream_id] = False
-        self.callback_error_counts[stream_id] = 0
-        self.logger.info(f"流 {stream_id} 回调已重新启用")
+    # 回调函数相关方法已删除
+    # 告警通过 AlarmSystem 和 Kafka 直接推送，不再使用 HTTP 回调
     
     def start(self) -> bool:
         """启动API服务器"""

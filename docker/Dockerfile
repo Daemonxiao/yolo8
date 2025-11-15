@@ -1,6 +1,6 @@
 # AI视频识别系统 Docker镜像
 # 基于Python 3.10，包含OpenCV和YOLOv8依赖
-FROM docker.m.daocloud.io/library/python:3.10-slim
+FROM library/python:3.10-slim
 
 # 设置工作目录
 WORKDIR /app

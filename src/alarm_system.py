@@ -90,7 +90,7 @@ class AlarmSystem:
         
         # 告警通知方式配置
         self.notification_method = config_manager.get('alarm.notification_method', 'both')
-        self.logger.info(f"告警通知方式: {self.notification_method}")
+        self.logger.info(f"告警通知方式: {self.notification_method}, 格式: v2 (sceneId, deviceGbCode, alarmTime, path)")
         
         # 报警规则管理
         self.rules: Dict[str, AlarmRule] = {}
@@ -452,14 +452,12 @@ class AlarmSystem:
         - kafka: 只通过Kafka推送
         - both: 同时使用HTTP和Kafka
         
-        告警数据格式：
+        直接创建v2格式告警数据：
         {
+            "sceneId": "场景ID",
             "deviceGbCode": "设备编号",
-            "alarmType": "告警类型",
-            "alarmLevel": "告警级别",
             "alarmTime": "告警时间",
-            "pic": "告警图片URL",
-            "record": "告警录像URL"
+            "path": "图片路径"
         }
         """
         try:
@@ -475,14 +473,27 @@ class AlarmSystem:
             alarm_time_str = datetime.fromtimestamp(alarm_event.timestamp).strftime('%Y-%m-%d %H:%M:%S')
             alarm_time_obj = datetime.fromtimestamp(alarm_event.timestamp)
             
-            # 构建告警数据
+            # 获取sceneId
+            scene_id = self._get_scene_id(alarm_event.stream_id, device_gb_code)
+            if not scene_id:
+                self.logger.warning(f"无法从流ID {alarm_event.stream_id} 获取场景ID，跳过告警通知")
+                return
+            
+            # 上传图片到外部平台获取path
+            image_path = ''
+            if alarm_event.image_url:
+                uploaded_path = self._upload_image_to_platform(alarm_event.image_url)
+                if uploaded_path:
+                    image_path = uploaded_path
+                else:
+                    self.logger.warning(f"图片上传失败，告警将不包含图片: {alarm_event.image_url}")
+            
+            # 构建v2格式告警数据
             alarm_data = {
+                'sceneId': scene_id,
                 'deviceGbCode': device_gb_code,
-                'alarmType': alarm_event.class_name,  # 告警类型（检测到的类别）
-                'alarmLevel': alarm_event.alarm_type,  # 告警级别（high/medium/low）
                 'alarmTime': alarm_time_str,
-                'pic': alarm_event.image_url if hasattr(alarm_event, 'image_url') and alarm_event.image_url else '',
-                'record': alarm_event.record_url if hasattr(alarm_event, 'record_url') and alarm_event.record_url else ''
+                'path': image_path
             }
             
             # 根据配置决定发送方式
@@ -495,24 +506,26 @@ class AlarmSystem:
             
             # 发送Kafka消息
             if self.notification_method in ['kafka', 'both']:
+                # Kafka使用旧格式（保持兼容）
+                record_url = alarm_event.record_url if hasattr(alarm_event, 'record_url') and alarm_event.record_url else ''
                 kafka_success = self._send_kafka_message(
                     scene=scene_name or alarm_event.class_name,
                     device_gb_code=device_gb_code,
-                    pic_url=alarm_data['pic'],
-                    record_url=alarm_data['record'],
+                    pic_url=image_path,
+                    record_url=record_url,
                     alarm_time=alarm_time_obj
                 )
             
             # 记录发送结果
             if self.notification_method == 'http':
                 status = "成功" if http_success else "失败"
-                self.logger.info(f"告警HTTP回调{status}: {device_gb_code}, 类型: {alarm_event.class_name}")
+                self.logger.info(f"告警HTTP回调{status}: sceneId={scene_id}, 设备={device_gb_code}, 类型={alarm_event.class_name}")
             elif self.notification_method == 'kafka':
                 status = "成功" if kafka_success else "失败"
-                self.logger.info(f"告警Kafka推送{status}: {device_gb_code}, 类型: {alarm_event.class_name}")
+                self.logger.info(f"告警Kafka推送{status}: sceneId={scene_id}, 设备={device_gb_code}, 类型={alarm_event.class_name}")
             else:  # both
                 self.logger.info(
-                    f"告警通知发送完成: {device_gb_code}, 类型: {alarm_event.class_name} "
+                    f"告警通知发送完成: sceneId={scene_id}, 设备={device_gb_code}, 类型={alarm_event.class_name} "
                     f"(HTTP: {'✓' if http_success else '✗'}, Kafka: {'✓' if kafka_success else '✗'})"
                 )
                 
@@ -555,12 +568,46 @@ class AlarmSystem:
         
         return device_gb_code, scene_name
     
+    def _get_scene_id(self, stream_id: str, device_gb_code: str) -> Optional[str]:
+        """
+        获取场景ID
+        
+        Args:
+            stream_id: 流ID
+            device_gb_code: 设备国标编码
+            
+        Returns:
+            场景ID 或 None
+        """
+        # 1. 尝试从流管理器获取场景ID
+        if self.stream_manager:
+            stream_info = self.stream_manager.get_stream_info(stream_id)
+            if stream_info and 'config' in stream_info:
+                config = stream_info['config']
+                if 'scene_id' in config and config['scene_id']:
+                    scene_id = str(config['scene_id'])
+                    self.logger.debug(f"从stream_info获取场景ID: {scene_id}")
+                    return scene_id
+        
+        # 2. 如果无法从流管理器获取，返回None
+        # 注意：不再从流ID中提取，因为流ID中是场景名称而不是场景ID
+        self.logger.warning(f"无法获取场景ID: stream_id={stream_id}")
+        return None
+    
     def _send_http_callback(self, alarm_data: dict) -> bool:
         """
         通过HTTP回调发送告警到设备平台
         
+        发送v2格式告警数据：
+        {
+            "sceneId": "场景ID",
+            "deviceGbCode": "设备编号",
+            "alarmTime": "告警时间",
+            "path": "图片路径"
+        }
+        
         Args:
-            alarm_data: 告警数据
+            alarm_data: v2格式告警数据
             
         Returns:
             是否发送成功
@@ -570,11 +617,67 @@ class AlarmSystem:
             return False
         
         try:
-            success = self.device_client.send_alarm(alarm_data)
+            success = self.device_client.send_alarm_v2(alarm_data)
             return success
         except Exception as e:
             self.logger.error(f"HTTP回调发送异常: {e}")
             return False
+    
+    def _upload_image_to_platform(self, image_url: str) -> Optional[str]:
+        """
+        上传图片到外部平台
+        
+        Args:
+            image_url: 本地图片URL
+            
+        Returns:
+            外部平台返回的图片路径，失败返回None
+        """
+        try:
+            import os
+            from werkzeug.datastructures import FileStorage
+            
+            # 从URL提取本地文件路径
+            # image_url 格式：http://server/results/path/to/image.jpg
+            # 需要转换为本地文件系统路径
+            if '/results/' in image_url:
+                # 提取 results 后面的路径
+                rel_path = image_url.split('/results/')[-1]
+                # 构建本地文件路径
+                local_path = os.path.join('results', rel_path.replace('/', os.sep))
+                
+                if os.path.exists(local_path):
+                    # 根据文件扩展名确定content_type
+                    ext = os.path.splitext(local_path)[1].lower()
+                    content_type = 'image/jpeg' if ext in ['.jpg', '.jpeg'] else 'image/png'
+                    
+                    # 读取文件并上传
+                    with open(local_path, 'rb') as f:
+                        file_storage = FileStorage(
+                            stream=f,
+                            filename=os.path.basename(local_path),
+                            content_type=content_type
+                        )
+                        
+                        result = self.device_client.upload_alarm_image(file_storage)
+                        
+                        if result.get('status') == 0:
+                            path = result.get('data', {}).get('path', '')
+                            self.logger.info(f"图片上传成功: {path}")
+                            return path
+                        else:
+                            self.logger.warning(f"图片上传失败: {result.get('message')}")
+                            return None
+                else:
+                    self.logger.warning(f"本地文件不存在: {local_path}")
+                    return None
+            else:
+                self.logger.warning(f"无法解析图片URL: {image_url}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"上传图片异常: {e}")
+            return None
     
     def _send_kafka_message(
         self,
