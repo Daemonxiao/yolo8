@@ -13,8 +13,8 @@ from dataclasses import dataclass
 @dataclass
 class StreamAddress:
     """视频流地址"""
-    rtsp: str
-    rtmp: Optional[str] = None
+    rtmp: str  # 主要使用RTMP流
+    rtsp: Optional[str] = None  # RTSP流（可选）
     hls: Optional[str] = None
     flv: Optional[str] = None
     webrtc: Optional[str] = None
@@ -49,7 +49,7 @@ class DevicePlatformClient:
         Returns:
             StreamAddress对象，包含各种流地址；失败返回None
         """
-        url = f"{self.base_url}/device/getPlayUrl"
+        url = f"{self.base_url}/api/channel/getPlayUrlByGbCode"
         data = {"deviceGbCode": device_gb_code}
         
         for attempt in range(self.retry_times):
@@ -67,15 +67,22 @@ class DevicePlatformClient:
                 
                 if result.get('status') == 0:
                     stream_data = result.get('data', {})
+                    
+                    # 优先使用RTMP流
+                    rtmp_url = stream_data.get('rtmp', '')
+                    if not rtmp_url:
+                        self.logger.warning(f"设备 {device_gb_code} 未返回RTMP流地址")
+                        return None
+                    
                     stream_addr = StreamAddress(
-                        rtsp=stream_data.get('rtsp', ''),
-                        rtmp=stream_data.get('rtmp'),
+                        rtmp=rtmp_url,
+                        rtsp=stream_data.get('rtsp'),
                         hls=stream_data.get('hls'),
                         flv=stream_data.get('flv'),
                         webrtc=stream_data.get('webrtc')
                     )
                     
-                    self.logger.info(f"成功获取设备 {device_gb_code} 的流地址: {stream_addr.rtsp}")
+                    self.logger.info(f"成功获取设备 {device_gb_code} 的RTMP流地址: {stream_addr.rtmp}")
                     return stream_addr
                 else:
                     self.logger.warning(f"获取播放地址失败: {result.get('message', '未知错误')}")
@@ -103,7 +110,7 @@ class DevicePlatformClient:
         Returns:
             心跳是否成功
         """
-        url = f"{self.base_url}/device/heartBeat"
+        url = f"{self.base_url}/api/channel/heartbeatByGbCode"
         data = {"deviceGbCode": device_gb_code}
         
         try:

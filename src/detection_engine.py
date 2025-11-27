@@ -1165,10 +1165,10 @@ class DetectionEngine:
                             (x1 + 5, y2 - 10),
                             font, 0.5, (255, 255, 255), 1)
 
-            # 在图片上添加时间戳和流信息
-            info_text = f"Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}"
-            cv2.putText(annotated_frame, info_text,
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            # # 在图片上添加时间戳和流信息
+            # info_text = f"Stream: {result.stream_id} | Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}"
+            # cv2.putText(annotated_frame, info_text,
+            #             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # stats_text = f"Frame: {result.frame_id} | Objects: {result.bbox_count} | Processing: {result.processing_time:.3f}s"
             # cv2.putText(annotated_frame, stats_text,

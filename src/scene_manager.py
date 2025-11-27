@@ -209,10 +209,10 @@ class SceneManager:
                 # 3.1 获取流地址
                 stream_addr = self.device_client.get_play_url(device_gb_code)
                 
-                if not stream_addr or not stream_addr.rtsp:
+                if not stream_addr or not stream_addr.rtmp:
                     failed_devices.append({
                         'deviceGbCode': device_gb_code,
-                        'reason': '获取流地址失败'
+                        'reason': '获取RTMP流地址失败'
                     })
                     continue
                 
@@ -226,7 +226,7 @@ class SceneManager:
                 
                 stream_config = StreamConfig(
                     stream_id=stream_id,
-                    rtsp_url=stream_addr.rtsp,
+                    rtsp_url=stream_addr.rtmp,  # 注意：字段名保持rtsp_url但实际使用RTMP流
                     name=f"{scene}_{device_gb_code}",
                     description=f"场景: {scene}, 设备: {device_gb_code}",
                     confidence_threshold=detection_params.get('confidence_threshold', 0.5),
@@ -350,7 +350,7 @@ class SceneManager:
                     'deviceGbCode': dev.device_gb_code,
                     'area': dev.area,
                     'stream_id': dev.stream_id,
-                    'rtsp_url': dev.stream_addr.rtsp if dev.stream_addr else None
+                    'stream_url': dev.stream_addr.rtmp if dev.stream_addr else None  # 使用RTMP流
                 }
                 for dev in deployment.devices
             ]
