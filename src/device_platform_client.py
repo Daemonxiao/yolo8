@@ -201,7 +201,7 @@ class DevicePlatformClient:
         # 所以这里需要配置外部平台的告警接收接口地址
         
         # 从配置中读取告警接收接口地址
-        alarm_url = self.base_url + "/api/alarm/receive"  # 这个需要配置
+        alarm_url = self.base_url + "/api/channel/pushAlarmInfo"  # 这个需要配置
         
         try:
             response = requests.post(
