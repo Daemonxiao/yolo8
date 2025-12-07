@@ -239,6 +239,8 @@ class DetectionEngine:
         # 晨会时间配置
         self.meeting_start_time = self.custom_type_config.get('meeting_start_time', '08:00')
         self.meeting_end_time = self.custom_type_config.get('meeting_end_time', '08:30')
+        # 晨会持续有人判定时长（分钟），默认5分钟
+        self.meeting_required_minutes = self.custom_type_config.get('meeting_required_minutes', 5)
         self.meeting_check_enabled = self.custom_type_config.get('enabled', True)
         
         # 工作日配置（0=周一, 6=周日）
@@ -252,6 +254,7 @@ class DetectionEngine:
         
         self.logger.info(f"安全晨会预警配置:")
         self.logger.info(f"  - 晨会时间: {self.meeting_start_time} - {self.meeting_end_time}")
+        self.logger.info(f"  - 判定时长: {self.meeting_required_minutes} 分钟（连续有人视为已召开）")
         self.logger.info(f"  - 工作日: {self.meeting_weekdays}")
         self.logger.info(f"  - 人员类别: {self.person_class_names}")
 
@@ -1129,12 +1132,7 @@ class DetectionEngine:
                 x1, y1, x2, y2 = map(int, bbox)
 
                 # 根据置信度选择颜色
-                if confidence >= 0.7:
-                    color = (0, 255, 0)  # 绿色 - 高置信度
-                elif confidence >= 0.5:
-                    color = (0, 255, 255)  # 黄色 - 中等置信度
-                else:
-                    color = (0, 0, 255)  # 红色 - 低置信度
+                color = (0, 0, 255)  # 红色 - 低置信度
 
                 # 绘制边界框
                 cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
@@ -1393,10 +1391,9 @@ class DetectionEngine:
         """
         检查安全晨会条件，并直接修改检测结果
         
-        Args:
-            result: 检测结果（会被直接修改）
-            stream_id: 流ID
-            
+        规则：在规定时间段内，如果连续累计检测到人员达5分钟，则认为晨会已召开；
+        否则在时间段结束时触发告警。
+        
         Returns:
             是否应该继续处理（保存结果、触发回调等）
         """
@@ -1404,69 +1401,109 @@ class DetectionEngine:
             return False  # 晨会预警模式下，如果未启用则不处理任何结果
         
         try:
-            current_time = datetime.now()
-            current_weekday = current_time.weekday()
+            now = datetime.now()
+            current_date = now.date()
+            current_weekday = now.weekday()
             
             # 检查是否为工作日
             if current_weekday not in self.meeting_weekdays:
                 return False  # 非工作日不处理
             
-            # 检查是否在晨会时间段内
-            if not self._is_meeting_time(current_time):
-                return False  # 非晨会时间不处理
+            # 解析时间段
+            start_hour, start_minute = map(int, self.meeting_start_time.split(':'))
+            end_hour, end_minute = map(int, self.meeting_end_time.split(':'))
+            start_time = dt_time(start_hour, start_minute)
+            end_time = dt_time(end_hour, end_minute)
+            now_time = now.time()
             
-            # 初始化流的告警状态
-            if stream_id not in self.meeting_alert_states:
-                self.meeting_alert_states[stream_id] = {
-                    'alert_sent_today': False,
-                    'last_check_date': current_time.date()
-                }
+            def _within_window(t: dt_time) -> bool:
+                # 早晨时间段通常不跨日，这里假设 start_time <= end_time
+                return start_time <= t <= end_time
             
-            # 检查是否需要重置每日状态
-            if self.meeting_alert_states[stream_id]['last_check_date'] != current_time.date():
-                self.meeting_alert_states[stream_id] = {
-                    'alert_sent_today': False,
-                    'last_check_date': current_time.date()
-                }
+            def _after_window(t: dt_time) -> bool:
+                return t > end_time
             
-            # 如果今天已经发送过告警，不再重复检查
-            if self.meeting_alert_states[stream_id]['alert_sent_today']:
-                return False  # 今天已告警，不再处理
+            # 初始化/重置状态
+            state = self.meeting_alert_states.setdefault(stream_id, {
+                'alert_sent_today': 0,
+                'meeting_done': False,
+                'last_check_date': current_date,
+                'presence_accumulated': 0.0,  # 累计有人时长（秒）
+                'last_person_ts': None
+            })
             
-            # 检查是否检测到人员
+            # 跨天重置
+            if state['last_check_date'] != current_date:
+                state.update({
+                    'alert_sent_today': 0,
+                    'meeting_done': False,
+                    'last_check_date': current_date,
+                    'presence_accumulated': 0.0,
+                    'last_person_ts': None
+                })
+            
+            # 如果今天已完成或已告警，跳过特殊处理，让正常流程继续
+            if state['meeting_done'] or state['alert_sent_today'] > 4:
+                return False
+            
+            in_window = _within_window(now_time)
+            after_window = _after_window(now_time)
+            
             has_person = self._has_person_detected(result)
             
-            if not has_person:
-                # 没有检测到人员，清空原有检测结果，添加晨会告警目标
+            # 1) 窗口内逻辑：累计有人时长
+            if in_window:
+                if has_person:
+                    if state['last_person_ts'] is None:
+                        state['last_person_ts'] = now
+                    else:
+                        delta = (now - state['last_person_ts']).total_seconds()
+                        if delta > 0:
+                            state['presence_accumulated'] += delta
+                        state['last_person_ts'] = now
+                    
+                    # 达到配置的判定时长（分钟）视为晨会已召开
+                    required_seconds = max(1, int(self.meeting_required_minutes * 60))
+                    if state['presence_accumulated'] >= required_seconds:
+                        state['meeting_done'] = True
+                        self.logger.info(
+                            f"流 {stream_id} 晨会检测：已累计有人≥{self.meeting_required_minutes}分钟，视为晨会已召开")
+                        return False  # 继续正常处理，不触发晨会未召开告警
+                    
+                    # 窗口内有人但未满5分钟，不触发告警，正常继续
+                    return False
+                else:
+                    # 窗口内无人，重置last_person_ts，但不清零累计时长
+                    state['last_person_ts'] = None
+                    return False  # 继续正常处理，不立即告警
+            
+            # 2) 窗口结束后：如果未达到5分钟且未告警，则触发告警
+            if after_window and (not state['meeting_done']) and (state['alert_sent_today'] > 4):
+                # 清空原有检测结果，添加虚拟告警目标
                 result.detections.clear()
                 result.confidence_scores.clear()
                 
-                # 添加虚拟的晨会告警目标
                 meeting_alert_detection = {
                     'id': 0,
                     'class_name': '晨会未召开',
-                    'class_id': 9999,  # 使用一个特殊的class_id
+                    'class_id': 9999,  # 特殊class_id
                     'confidence': 1.0,
-                    'bbox': [0, 0, 100, 50],  # 虚拟的边界框，显示在左上角
+                    'bbox': [0, 0, 100, 50],  # 虚拟框，左上角
                     'center': [50, 25],
                     'area': 5000
                 }
                 
-                # 添加到检测结果中
                 result.detections.append(meeting_alert_detection)
                 result.confidence_scores.append(1.0)
                 result.bbox_count = 1
                 
-                # 标记今天已发送告警
-                self.meeting_alert_states[stream_id]['alert_sent_today'] = True
-                
-                self.logger.warning(f"🚨 流 {stream_id} 在晨会时间段内未检测到人员，已添加告警目标")
-                return True  # 继续处理，保存告警结果
-            else:
-                # 检测到人员，晨会正常进行，不需要保存结果
-                self.logger.debug(f"🚶 流 {stream_id} 在晨会时间段内检测到人员，晨会正常进行")
-                return False  # 不继续处理，正常情况不需要保存
+                state['alert_sent_today'] += 1
+                self.logger.warning(f"流 {stream_id} 晨会检测：时间结束且累计有人<{self.meeting_required_minutes}分钟，触发未召开告警")
+                return True  # 继续处理，保存并告警
             
+            # 窗口外（未到开始或已结束但已处理完），不做特殊处理
+            return False
+        
         except Exception as e:
             self.logger.error(f"晨会预警检查失败: {e}")
             return False  # 出错时不处理
