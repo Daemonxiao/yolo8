@@ -10,9 +10,10 @@ model:
   algorithm_models:
     "火焰检测": "pt_dir/fire_smoke/best.pt"
     "人员检测": "pt_dir/person/best.pt"
-    "安全帽检测": "pt_dir/helmet/best.pt"
+    "buildernotwearhelmet": "pt_dir/helmet/best.pt"
     "垃圾分类": "pt_dir/constuction_waste/constuction_waste/best.pt"
     "裸土检测": "pt_dir/luotu/best.pt"
+    "meeting": "pt_dir/person/best.pt"
   
   # 算法目标类别映射（可选，用于类别过滤）
   # 空列表 [] 表示检测所有类别
@@ -21,13 +22,14 @@ model:
     "人员检测": [ "person" ]
     "垃圾分类": [ "" ]  # 检测所有垃圾类别
     "裸土检测": [ "noncovered" ]
-    "安全帽检测": [ "head" ]
+    "buildernotwearhelmet": [ "head" ]
+    "meeting": [ "person" ]
   
   # 算法自定义处理类型映射（可选）
   # 每个算法可以指定自己的 custom_type
   algorithm_custom_types:
     "高温预警": "high_temperature_alert"
-    "晨会预警": "morning_meeting_alert"
+    "meeting": "morning_meeting_alert"
     "天气预警": "weather_safety_alert"
   
   # 是否在启动时预加载所有模型
@@ -69,10 +71,12 @@ detection:
     fixed_temperature: 25.0        # 固定温度值（当source为"fixed"时使用）
     
     # 安全晨会预警配置（当custom_type为"morning_meeting_alert"时使用）
-    meeting_start_time: "08:00"    # 晨会开始时间
-    meeting_end_time: "08:30"      # 晨会结束时间
-    weekdays: [ 0, 1, 2, 3, 4 ]      # 工作日（0=周一, 6=周日）
+    meeting_start_time: "13:00"    # 晨会开始时间
+    meeting_end_time: "14:08"      # 晨会结束时间
+
+    weekdays: [ 0, 1, 2, 3, 4,5,6 ]      # 工作日（0=周一, 6=周日）
     person_class_names: [ "person", "人", "人员" ]  # 人员类别名称
+    meeting_required_minutes: 1  # 自定义需要连续有人的分钟数
     
     # 防台防汛施工预警配置（当custom_type为"weather_safety_alert"时使用）
     wind_power_threshold: 6        # 风力阈值（级）
@@ -152,9 +156,9 @@ server:
 # 设备平台配置（重要！必须配置）⭐
 device_platform:
   # 设备管理平台地址
-  # Docker 部署时使用 host.docker.internal 访问宿主机服务
+  # Docker 部署时使用 localhost 访问宿主机服务
   # 本地运行时使用 127.0.0.1
-  base_url: "http://host.docker.internal:8081"  # 修改为实际的设备平台地址
+  base_url: "http://localhost:8081"  # 修改为实际的设备平台地址
   # 接口调用超时时间（秒）
   timeout: 10
   # 失败重试次数
@@ -165,8 +169,8 @@ device_platform:
 # Kafka配置（重要！必须配置）⭐
 kafka:
   # 外部Kafka服务器地址（注意：这里应该是 Kafka 地址，不是 HTTP 地址）
-  # Docker 部署时使用 host.docker.internal 访问宿主机服务
-  bootstrap_servers: "host.docker.internal:9092"  # 修改为实际的Kafka地址，格式：host:port
+  # Docker 部署时使用 localhost 访问宿主机服务
+  bootstrap_servers: "localhost:9092"  # 修改为实际的Kafka地址，格式：host:port
   # 告警推送Topic
   topic: "event-alarm"
   # 是否启用Kafka推送
