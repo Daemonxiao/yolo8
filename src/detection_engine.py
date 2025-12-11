@@ -428,18 +428,19 @@ class DetectionEngine:
             if model_path is None:
                 model_path = self.model_path
             
-            # 确保模型已加载
-            model = model_manager.get_model(model_path)
+            # 确保模型已加载（传递stream_id以支持每流独立模型）
+            model = model_manager.get_model(model_path, stream_id=stream_id)
             if model is None:
                 self.logger.error(f"无法加载模型: {model_path}")
                 return False
-            
+            self.logger.info(f'模型加载成功:{stream_id}')
             # 测试视频源连接
             cap = cv2.VideoCapture(video_source)
             if not cap.isOpened():
                 self.logger.error(f"无法打开视频源: {video_source}")
                 return False
             cap.release()
+            self.logger.info(f'视频打开成功:{stream_id}')
 
             # 合并检测参数
             params = self.detection_params.copy()
@@ -521,11 +522,22 @@ class DetectionEngine:
 
     def _cleanup_stream(self, stream_id: str) -> None:
         """清理视频流相关资源"""
+        # 获取模型路径（在删除stream_info之前）
+        stream_info = self.active_streams.get(stream_id)
+        model_path = stream_info.get('model_path') if stream_info else None
+        
+        # 清理流状态
         self.active_streams.pop(stream_id, None)
         self.detection_threads.pop(stream_id, None)
         self.result_queues.pop(stream_id, None)
         self.alarm_states.pop(stream_id, None)
         self.last_alarm_time.pop(stream_id, None)
+        
+        # 如果使用每流独立模型模式，卸载该流的模型实例
+        if model_path:
+            from .model_manager import model_manager
+            if model_manager.per_stream_model:
+                model_manager.unload_stream_model(model_path, stream_id)
 
     def _detection_worker(self, stream_id: str, stream_info: Dict) -> None:
         """检测工作线程"""
@@ -582,7 +594,7 @@ class DetectionEngine:
                     self.logger.warning(f"读取帧失败: {stream_id}")
                     if self._should_reconnect(stream_id):
                         cap.release()
-                        cap = self._reconnect_stream(video_source)
+                        cap = self._reconnect_stream(video_source, stream_id)
                         if cap is None:
                             break
                     continue
@@ -705,7 +717,7 @@ class DetectionEngine:
             # 获取模型（从active_streams中获取模型路径）
             stream_info = self.active_streams.get(stream_id, {})
             model_path = stream_info.get('model_path', self.model_path)
-            model = model_manager.get_model(model_path)
+            model = model_manager.get_model(model_path, stream_id=stream_id)  # 传递stream_id以支持每流独立模型
             
             if model is None:
                 self.logger.error(f"模型未加载: {model_path}")
@@ -927,19 +939,19 @@ class DetectionEngine:
         """判断是否应该重连"""
         return True
 
-    def _reconnect_stream(self, video_source: str) -> Optional[cv2.VideoCapture]:
+    def _reconnect_stream(self, video_source, stream_id : str) -> Optional[cv2.VideoCapture]:
         """重连视频流"""
         max_attempts = config_manager.get('video_streams.max_reconnect_attempts', 10)
         reconnect_interval = config_manager.get('video_streams.reconnect_interval', 5)
 
         for attempt in range(max_attempts):
-            self.logger.info(f"尝试重连视频流，第 {attempt + 1} 次")
+            self.logger.info(f"尝试重连视频流{stream_id}，第 {attempt + 1} 次")
 
             time.sleep(reconnect_interval)
 
             cap = cv2.VideoCapture(video_source)
             if cap.isOpened():
-                self.logger.info("视频流重连成功")
+                self.logger.info(f"视频流{stream_id}重连成功")
                 return cap
             cap.release()
 
@@ -1421,7 +1433,14 @@ class DetectionEngine:
                 return start_time <= t <= end_time
             
             def _after_window(t: dt_time) -> bool:
-                return t > end_time
+                if t > end_time:
+                    # 计算时间差（分钟）
+                    t_minutes = t.hour * 60 + t.minute
+                    end_minutes = end_time.hour * 60 + end_time.minute
+                    time_diff = t_minutes - end_minutes
+                    # 在5分钟之内返回True
+                    return time_diff <= 5
+                return False
             
             # 初始化/重置状态
             state = self.meeting_alert_states.setdefault(stream_id, {
@@ -1478,7 +1497,7 @@ class DetectionEngine:
                     return False  # 继续正常处理，不立即告警
             
             # 2) 窗口结束后：如果未达到5分钟且未告警，则触发告警
-            if after_window and (not state['meeting_done']) and (state['alert_sent_today'] > 4):
+            if after_window and (not state['meeting_done']) and (state['alert_sent_today'] < 4):
                 # 清空原有检测结果，添加虚拟告警目标
                 result.detections.clear()
                 result.confidence_scores.clear()

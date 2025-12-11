@@ -208,7 +208,7 @@ class SceneManager:
             try:
                 # 3.1 获取流地址
                 stream_addr = self.device_client.get_play_url(device_gb_code)
-                
+
                 if not stream_addr or not stream_addr.rtmp:
                     failed_devices.append({
                         'deviceGbCode': device_gb_code,
@@ -218,7 +218,8 @@ class SceneManager:
                 
                 # 3.2 生成内部流ID
                 stream_id = f"scene_{scene}_{device_gb_code}".replace(' ', '_')
-                
+                self.logger.info(f'获取流地址成功:{stream_id}')
+
                 # 3.3 注册视频流
                 # 从配置文件读取FPS限制（5秒1帧 = 0.2 FPS）
                 from .config_manager import config_manager
@@ -252,6 +253,7 @@ class SceneManager:
                         'reason': f"注册流失败: {register_result.get('error', '未知错误')}"
                     })
                     continue
+                self.logger.info(f'注册流成功:{stream_id}')
                 
                 # 3.4 启动检测
                 start_result = self.stream_manager.start_stream(stream_id)
@@ -263,7 +265,8 @@ class SceneManager:
                         'reason': f"启动流失败: {start_result.get('error', '未知错误')}"
                     })
                     continue
-                
+                self.logger.info(f'启动流成功:{stream_id}')
+
                 # 3.5 启动心跳
                 self.heartbeat_manager.start_heartbeat(device_gb_code)
                 
@@ -275,7 +278,6 @@ class SceneManager:
                     stream_id=stream_id
                 )
                 deployed_devices.append(device_info)
-                
                 self.logger.info(f"设备 {device_gb_code} 部署成功")
                 
             except Exception as e:
